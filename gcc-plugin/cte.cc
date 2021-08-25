@@ -74,7 +74,6 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     // fn_end (function end address) as a (void *)
     std::string lab_name = std::string(".LFE") + std::to_string(node->get_fun()->funcdef_no);
     tree lab = build_decl(BUILTINS_LOCATION, VAR_DECL, NULL_TREE, ptrtype);
-    DECL_EXTERNAL(lab) = 1;
     TREE_STATIC(lab) = 1;
     SET_DECL_ASSEMBLER_NAME(lab, get_identifier(lab_name.c_str()));
     CONSTRUCTOR_APPEND_ELT(obj, info_fields, build1(ADDR_EXPR, ptrtype, lab));
@@ -92,13 +91,18 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     info_fields = DECL_CHAIN(info_fields);
 
     // callees
-    auto array_name = std::string("__cte_callees_") +
+    auto array_name = std::string(".cte_callees_") +
         IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node->decl));
     vec<constructor_elt, va_gc> *array_ctor = NULL;
     if (!callees.empty()) {
         for (auto &callee : callees) {
-            tree c = build1(ADDR_EXPR, ptrtype, callee);
-            CONSTRUCTOR_APPEND_ELT(array_ctor, NULL, c);
+            // Make a fake decl to trick the compiler into not setting
+            // address_taken in the callee
+            const char *name = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(callee));
+            tree lab = build_decl(BUILTINS_LOCATION, VAR_DECL, NULL_TREE, ptrtype);
+            SET_DECL_ASSEMBLER_NAME(lab, get_identifier(name));
+            TREE_STATIC(lab) = 1;
+            CONSTRUCTOR_APPEND_ELT(array_ctor, NULL, build1(ADDR_EXPR, ptrtype, lab));
         }
         tree qtype = build_qualified_type(ptrtype, TYPE_QUAL_CONST);
         tree itype = build_index_type(size_int(callees.size() - 1));
@@ -111,7 +115,7 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
         DECL_VISIBILITY_SPECIFIED(array) = 1;
         DECL_VISIBILITY(array) = VISIBILITY_HIDDEN;
         DECL_INITIAL(array) = build_constructor(array_type, array_ctor);
-        set_decl_section_name(array, "__cte_data_");
+        set_decl_section_name(array, ".cte_data");
         varpool_node::finalize_decl(array);
 
         tree array_ptrtype = build_pointer_type(build_pointer_type(void_type_node));
