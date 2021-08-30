@@ -10,6 +10,6 @@ printf "[\n" > $OUT
 for f in {*.c,*.cc}; do
     obj=${f%.c*}.o
     printf '{ "directory": "%s", "file": "%s", "command": "%s" },\n' \
-           "$PWD" "$f" "$(make -n --always-make "$obj" | head -n 1)" >> $OUT
+           "$PWD" "$f" "$(make -n --always-make "$obj" | tail -n 1)" >> $OUT
 done
 printf "]\n" >> $OUT
