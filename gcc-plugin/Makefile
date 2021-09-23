@@ -1,6 +1,6 @@
 CXX:= g++
 GCCPLUGINS_DIR:= $(shell $(CXX) -print-file-name=plugin)
-CXXFLAGS += -I$(GCCPLUGINS_DIR)/include -fPIC -fno-rtti -gdwarf-2 -Wall -Wextra -pedantic -std=c++20
+CXXFLAGS += -I$(GCCPLUGINS_DIR)/include -fPIC -fno-rtti -gdwarf-2 -Wall -Wextra
 SOURCES = $(wildcard *.cc)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCT = cte.so
