@@ -30,8 +30,7 @@ static tree build_info_fn_type()
 {
     /*
      * struct __cte_info_fn {
-     *   void *fn;
-     *   void *fn_end;
+     *   void *vaddr;
      *   int flags;
      *   int calles_count;
      *   void **callees;
@@ -42,9 +41,6 @@ static tree build_info_fn_type()
     tree field, fields = NULL_TREE;
 
     // fn
-    RECORD_FIELD(build_pointer_type(void_type_node));
-
-    // fn_end
     RECORD_FIELD(build_pointer_type(void_type_node));
 
     // flags
@@ -72,25 +68,14 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     vec<constructor_elt, va_gc> *obj = NULL;
     tree info_fields = TYPE_FIELDS(type);
 
-    // fn (function address) as a (void *)
+    // vaddr (function address) as a (void *)
     CONSTRUCTOR_APPEND_ELT(obj, info_fields, build1(ADDR_EXPR, ptrtype, node->decl));
     info_fields = DECL_CHAIN(info_fields);
 
-    // fn_end (function end address) as a (void *)
-    if (node->definition) {
-        std::string lab_name = std::string(".LFE") +
-            std::to_string(node->get_fun()->funcdef_no);
-        tree lab = build_decl(BUILTINS_LOCATION, VAR_DECL, NULL_TREE, ptrtype);
-        TREE_STATIC(lab) = 1;
-        SET_DECL_ASSEMBLER_NAME(lab, get_identifier(lab_name.c_str()));
-        CONSTRUCTOR_APPEND_ELT(obj, info_fields, build1(ADDR_EXPR, ptrtype, lab));
-    } else {
-        CONSTRUCTOR_APPEND_ELT(obj, info_fields, null_pointer_node);
-    }
-    info_fields = DECL_CHAIN(info_fields);
-
     // flags as int
-    int flags = node->address_taken;
+    int definition = (!!node->definition) << 0;
+    int address_taken = (!!node->address_taken) << 1;
+    int flags = definition | address_taken;
     CONSTRUCTOR_APPEND_ELT(obj, info_fields,
                            build_int_cst(TREE_TYPE(info_fields), flags));
     info_fields = DECL_CHAIN(info_fields);
@@ -101,7 +86,7 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     info_fields = DECL_CHAIN(info_fields);
 
     // callees
-    auto array_name = std::string(".cte_callees_") +
+    auto array_name = std::string(".cte_callees") +
         IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node->decl));
     vec<constructor_elt, va_gc> *array_ctor = NULL;
     if (!callees.empty()) {
@@ -148,7 +133,7 @@ static void build_section_array(std::vector<tree> fns, tree info_fn_type) {
     tree itype = build_index_type(size_int(fns.size() - 1));
     tree array_type = build_array_type(qtype, itype);
     tree array = build_decl(BUILTINS_LOCATION, VAR_DECL, NULL_TREE, array_type);
-    SET_DECL_ASSEMBLER_NAME(array, get_identifier("__cte_fn_local"));
+    SET_DECL_ASSEMBLER_NAME(array, get_identifier(".cte_fn_local"));
     TREE_STATIC(array) = 1;
     TREE_ADDRESSABLE(array) = 1;
     DECL_NONALIASED(array) = 1;
@@ -165,7 +150,7 @@ static void build_section_array(std::vector<tree> fns, tree info_fn_type) {
     // Let the linker not throw away the array (__attribute__((used)))
     DECL_PRESERVE_P(array) = 1;
 
-    set_decl_section_name(array, "__cte_fn_");
+    set_decl_section_name(array, ".cte_fn");
     varpool_node::finalize_decl(array);
 }
 
@@ -198,11 +183,6 @@ static void collect_info(void*, void*) {
 
         std::set<tree> callees;
         for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
-            // FIXME HACK: Ignore cte functions
-            if (strcmp(edge->callee->asm_name(), "cte_init") == 0) continue;
-            if (strcmp(edge->callee->asm_name(), "cte_eliminate_graph") == 0) continue;
-            if (strcmp(edge->callee->asm_name(), "cte_eliminate_self") == 0) continue;
-
             if (!(cte_inlined_node(edge->callee) || cte_builtin_node(edge->callee)))
                 callees.insert(edge->callee->decl);
         }
