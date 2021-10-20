@@ -1,10 +1,9 @@
-#include <csignal>
-#include <cstddef>
 #include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <string>
+#include <sys/ucontext.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <assert.h>
@@ -36,6 +35,14 @@ struct cte_function {
     void *body;
     cte_info_fn *info_fn;
     bool essential;
+
+    void reload() {
+        memcpy(vaddr, body, size);
+    }
+
+    void kill() {
+        memset(vaddr, 0xcc, size);
+    }
 };
 
 static const int FLAG_ADDRESS_TAKEN = (1 << 1);
@@ -226,11 +233,33 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
                 if (f.name == "_start" ||
                     f.name == "__libc_start_main" ||
                     f.name == "main" ||
+
+                    // mprotect
                     f.name == "pkey_mprotect" ||
                     f.name == "__mprotect" ||
+
+                    // memcpy
+                    f.name == "memcpy@GLIBC_2.2.5" ||
+                    f.name == "__memcpy_avx_unaligned_erms" ||
+
+                    // memset
                     f.name == "__memcmp_sse4_1" ||
                     f.name == "__memset_avx2_erms" ||
-                    f.name == "__memset_avx2_unaligned_erms") {
+                    f.name == "__memset_avx2_unaligned_erms" ||
+
+                    // restore
+                    f.name == "_ZNKSt3mapIPv12cte_functionSt4lessIS0_ESaISt4pairIKS0_S1_EEE5countERS5_" ||
+                    f.name == "_ZNKSt8_Rb_treeIPvSt4pairIKS0_12cte_functionESt10_Select1stIS4_ESt4lessIS0_ESaIS4_EE4findERS2_" ||
+                    f.name == "_ZNKSt8_Rb_treeIPvSt4pairIKS0_12cte_functionESt10_Select1stIS4_ESt4lessIS0_ESaIS4_EE14_M_lower_boundEPKSt13_Rb_tree_nodeIS4_EPKSt18_Rb_tree_node_baseRS2_" ||
+                    f.name == "_S_right" ||
+
+                    // signal handler (what the hell)
+                    f.name == "strcmp" ||
+                    f.name == "check_match" ||
+                    f.name == "do_lookup_x" ||
+                    f.name == "_dl_lookup_symbol_x" ||
+                    f.name == "_dl_fixup" ||
+                    f.name == "_dl_runtime_resolve_xsavec") {
                     f.essential = true;
                 }
 
@@ -268,9 +297,46 @@ static void cte_modify_end(void *start, size_t size) {
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
 }
 
+volatile void *cte_vol_addr1 = (void*)0xdeadbeef;
+volatile void *cte_vol_addr2 = (void*)0xdeadbeef;
+
 __attribute__((section(".cte_essential")))
-static void cte_wipe_range(void *start, size_t size) {
-    memset(start, 0xcc, size);
+int cte_restore(void *addr) {
+    cte_vol_addr1 = addr;
+    if (functions.count(addr) != 1)
+        asm("int3");
+        //return CTE_INVALID_FUNCTION;
+    struct cte_function *f = &functions[addr];
+    cte_modify_begin(addr, f->size);
+    memcpy(addr, f->body, f->size);
+    cte_modify_end(addr, f->size);
+    return 0;
+}
+
+__attribute__((section(".cte_essential")))
+static void cte_restore_handler(void) {
+    // FIXME restore callee saved registers
+
+    // Set return address to function start
+    char **retp = (char**)__builtin_frame_address(0) + 1;
+    *retp -= 12;
+
+    // Restore the function body
+    cte_restore(*retp);
+}
+
+__attribute__((section(".cte_essential")))
+static void cte_wipe_fn(void *start, size_t size) {
+    if (size < 12)
+        return;
+
+    unsigned char *fn = (unsigned char*)start;
+    fn[0] = 0x48; // 64bit prefix
+    fn[1] = 0xb8; // absmov to %rax
+    *((uint64_t*)&fn[2]) = (uint64_t)cte_restore_handler;
+    fn[10] = 0xff; // call *%rax
+    fn[11] = 0xd0; // ...
+    memset(fn + 12, 0xcc, size - 12);
 }
 
 extern "C" {
@@ -305,7 +371,7 @@ extern "C" {
 
         for (auto it = func; it <= func_stop; it++) {
             if (!it->essential)
-                cte_wipe_range(it->vaddr, it->size);
+                cte_wipe_fn(it->vaddr, it->size);
         }
 
         for (auto it = text; it <= text_stop; it++)
