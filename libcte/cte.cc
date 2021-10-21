@@ -297,32 +297,57 @@ static void cte_modify_end(void *start, size_t size) {
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
 }
 
-volatile void *cte_vol_addr1 = (void*)0xdeadbeef;
-volatile void *cte_vol_addr2 = (void*)0xdeadbeef;
-
-__attribute__((section(".cte_essential")))
-int cte_restore(void *addr) {
-    cte_vol_addr1 = addr;
-    if (functions.count(addr) != 1)
-        asm("int3");
-        //return CTE_INVALID_FUNCTION;
-    struct cte_function *f = &functions[addr];
-    cte_modify_begin(addr, f->size);
-    memcpy(addr, f->body, f->size);
-    cte_modify_end(addr, f->size);
-    return 0;
+extern "C" {
+    __attribute__((section(".cte_essential"), used))
+    int cte_restore(void *addr) {
+        if (functions.count(addr) != 1)
+            return CTE_INVALID_FUNCTION;
+        struct cte_function *f = &functions[addr];
+        cte_modify_begin(addr, f->size);
+        memcpy(addr, f->body, f->size);
+        cte_modify_end(addr, f->size);
+        return 0;
+    }
 }
 
-__attribute__((section(".cte_essential")))
-static void cte_restore_handler(void) {
-    // FIXME restore callee saved registers
+__attribute__((section(".cte_essential"), naked))
+static void cte_restore_entry(void) {
+    asm(// Modify the return value to return to the original function start addr
+        "pushq %rdi\n"
+        "movq 8(%rsp), %rdi\n"
+        "leaq -12(%rdi), %rdi\n"
+        "movq %rdi, 8(%rsp)\n"
+        // -> rdi is the first argument for cte_restore
 
-    // Set return address to function start
-    char **retp = (char**)__builtin_frame_address(0) + 1;
-    *retp -= 12;
+        // Save the caller-saved registers
+        // rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11
+        "pushq %rax\n"
+        "pushq %rsi\n"
+        "pushq %rdx\n"
+        "pushq %rcx\n"
+        "pushq %r8\n"
+        "pushq %r9\n"
+        "pushq %r10\n"
+        "pushq %r11\n"
 
-    // Restore the function body
-    cte_restore(*retp);
+        // The stack must be 16-byte aligned before the call
+        "leaq -8(%rsp), %rsp\n"
+
+        "call cte_restore\n"
+
+        "leaq 8(%rsp), %rsp\n"
+
+        // Restore the caller-saved registers
+        "popq %r11\n"
+        "popq %r10\n"
+        "popq %r9\n"
+        "popq %r8\n"
+        "popq %rcx\n"
+        "popq %rdx\n"
+        "popq %rsi\n"
+        "popq %rax\n"
+        "popq %rdi\n"
+        "ret\n");
 }
 
 __attribute__((section(".cte_essential")))
@@ -330,12 +355,14 @@ static void cte_wipe_fn(void *start, size_t size) {
     if (size < 12)
         return;
 
+    // FIXME: rax not preserved
     unsigned char *fn = (unsigned char*)start;
     fn[0] = 0x48; // 64bit prefix
     fn[1] = 0xb8; // absmov to %rax
-    *((uint64_t*)&fn[2]) = (uint64_t)cte_restore_handler;
+    *((uint64_t*)&fn[2]) = (uint64_t)cte_restore_entry;
     fn[10] = 0xff; // call *%rax
     fn[11] = 0xd0; // ...
+
     memset(fn + 12, 0xcc, size - 12);
 }
 
