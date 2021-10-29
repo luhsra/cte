@@ -86,7 +86,7 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     info_fields = DECL_CHAIN(info_fields);
 
     // callees
-    auto array_name = std::string(".cte_callees") +
+    auto array_name = std::string(".cte_callees_") +
         IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node->decl));
     vec<constructor_elt, va_gc> *array_ctor = NULL;
     if (!callees.empty()) {
@@ -154,7 +154,7 @@ static void build_section_array(std::vector<tree> fns, tree info_fn_type) {
     varpool_node::finalize_decl(array);
 }
 
-static bool cte_inlined_node(cgraph_node *node) {
+static bool is_inlined_node(cgraph_node *node) {
 #if BUILDING_GCC_VERSION <= 9000
     return node->global.inlined_to != NULL;
 #else
@@ -162,7 +162,7 @@ static bool cte_inlined_node(cgraph_node *node) {
 #endif
 }
 
-static bool cte_builtin_node(cgraph_node *node) {
+static bool is_builtin_node(cgraph_node *node) {
     return DECL_BUILT_IN_CLASS(node->decl) != NOT_BUILT_IN;
 }
 
@@ -178,12 +178,12 @@ static void collect_info(void*, void*) {
             continue;
 
         // Abort if this is a inlined function or a builtin
-        if (cte_inlined_node(node) || cte_builtin_node(node))
+        if (is_inlined_node(node) || is_builtin_node(node))
             continue;
 
         std::set<tree> callees;
         for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
-            if (!(cte_inlined_node(edge->callee) || cte_builtin_node(edge->callee)))
+            if (!is_inlined_node(edge->callee))
                 callees.insert(edge->callee->decl);
         }
         tree fn = build_info_fn(info_fn_type, node, callees);

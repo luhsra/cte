@@ -9,14 +9,11 @@ extern "C" {
         CTE_ERROR_FORMAT = -1,
         CTE_ERROR_MPROTECT = -2,
         CTE_ERROR_SIGNAL = -3,
-        CTE_INVALID_FUNCTION = -4,
     };
 
     int cte_init(void);
 
     int cte_wipe(void);
-
-    int cte_restore(void *addr);
 
 #ifdef __cplusplus
 }

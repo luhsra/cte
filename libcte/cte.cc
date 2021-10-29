@@ -45,11 +45,17 @@ struct cte_function {
     }
 };
 
+struct cte_plt {
+    void *vaddr;
+    size_t size;
+};
+
 static const int FLAG_ADDRESS_TAKEN = (1 << 1);
 static const int FLAG_DEFINITION = (1 << 0);
 
 static std::vector<cte_text> texts;
 static std::map<void*, cte_function> functions;
+static std::vector<cte_plt> plts;
 
 static int cte_sort_compare(const void *e1, const void *e2) {
     struct cte_info_fn *a = (struct cte_info_fn*)e1;
@@ -191,6 +197,12 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
                    filename, sec.get_name().c_str(),
                    essential_sec_vaddr, essential_sec_size);
         }
+        if (sec.get_name() == ".plt") {
+            plts.push_back({
+                    .vaddr = cte_get_vaddr(info, sec.get_hdr().addr),
+                    .size = sec.size(),
+                });
+        }
     }
 
     texts.push_back({
@@ -252,6 +264,7 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
                     f.name == "_ZNKSt8_Rb_treeIPvSt4pairIKS0_12cte_functionESt10_Select1stIS4_ESt4lessIS0_ESaIS4_EE4findERS2_" ||
                     f.name == "_ZNKSt8_Rb_treeIPvSt4pairIKS0_12cte_functionESt10_Select1stIS4_ESt4lessIS0_ESaIS4_EE14_M_lower_boundEPKSt13_Rb_tree_nodeIS4_EPKSt18_Rb_tree_node_baseRS2_" ||
                     f.name == "_S_right" ||
+                    f.name == "_ZSt18_Rb_tree_incrementPSt18_Rb_tree_node_base" ||
 
                     // signal handler (what the hell)
                     f.name == "strcmp" ||
@@ -297,12 +310,67 @@ static void cte_modify_end(void *start, size_t size) {
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
 }
 
+__attribute__((section(".cte_essential")))
+static void *decode_plt(void *entry) {
+    unsigned char *a = (unsigned char*)entry;
+    if (a[0] != 0xff)
+        return NULL;
+    if (a[1] != 0x25)  // FIXME: this was determined empirically
+        return NULL;
+    unsigned char *rip = a + 6;
+    uint32_t offset = *((uint32_t*)(a + 2));
+    uintptr_t *got_entry = (uintptr_t*)(rip + offset);
+    return (void*)(*got_entry);
+}
+
 extern "C" {
     __attribute__((section(".cte_essential"), used))
-    int cte_restore(void *addr) {
+    static int cte_restore(void *addr, void *call_addr) {
+        // Find the function
         if (functions.count(addr) != 1)
-            return CTE_INVALID_FUNCTION;
+            asm("int3\n");
         struct cte_function *f = &functions[addr];
+        struct cte_function *cf = NULL;
+
+        // The function can be inserted if its address is taken
+        if (f->info_fn && (f->info_fn->flags | FLAG_ADDRESS_TAKEN))
+            goto allowed;
+
+        // Find the caller
+        // FIXME performance
+        for (auto &item : functions) {
+            auto c = &item.second;
+            if (call_addr >= c->vaddr && call_addr < ((char*)c->vaddr + c->size)) {
+                cf = c;
+                break;
+            }
+        }
+        if (cf && cf->info_fn) {
+            // A caller function was found, and it has a info_fn
+            // Let's see if we are allowed to call function f
+            for (int i = 0; i < cf->info_fn->calles_count; i++) {
+                void *callee = cf->info_fn->callees[i];
+                if (callee == addr) {
+                    goto allowed;
+                }
+                // Maybe the callee is a pointer to a .plt section
+                // FIXME performance?
+                size_t len = plts.size();
+                struct cte_plt *pa = plts.data();
+                for (struct cte_plt *p = pa; p < &pa[len]; p++) {
+                    if (callee >= p->vaddr &&
+                        callee < ((char*)p->vaddr + p->size)) {
+                        void *real_callee = decode_plt(callee);
+                        if (real_callee == addr) {
+                            goto allowed;
+                        }
+                    }
+                }
+            }
+            asm("int3\n");
+        }
+
+        allowed:
         cte_modify_begin(addr, f->size);
         memcpy(addr, f->body, f->size);
         cte_modify_end(addr, f->size);
@@ -312,17 +380,21 @@ extern "C" {
 
 __attribute__((section(".cte_essential"), naked))
 static void cte_restore_entry(void) {
-    asm(// Modify the return value to return to the original function start addr
-        "pushq %rdi\n"
-        "movq 8(%rsp), %rdi\n"
+    asm("pushq %rdi\n"
+        "pushq %rsi\n"
+
+        // rdi (first argument) is the current return pointer of this function
+        "movq 16(%rsp), %rdi\n"
+        // rsi (second argument) is the call address in the caller
+        "movq 24(%rsp), %rsi\n"
+
+        // Modify the return value to return to the original function start addr
         "leaq -12(%rdi), %rdi\n"
-        "movq %rdi, 8(%rsp)\n"
-        // -> rdi is the first argument for cte_restore
+        "movq %rdi, 16(%rsp)\n"
 
         // Save the caller-saved registers
         // rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11
         "pushq %rax\n"
-        "pushq %rsi\n"
         "pushq %rdx\n"
         "pushq %rcx\n"
         "pushq %r8\n"
@@ -344,8 +416,8 @@ static void cte_restore_entry(void) {
         "popq %r8\n"
         "popq %rcx\n"
         "popq %rdx\n"
-        "popq %rsi\n"
         "popq %rax\n"
+        "popq %rsi\n"
         "popq %rdi\n"
         "ret\n");
 }
