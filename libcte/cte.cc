@@ -1,7 +1,12 @@
+#include <elf.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <gelf.h>
 #include <string>
 #include <sys/ucontext.h>
 #include <unistd.h>
@@ -10,7 +15,6 @@
 #include <link.h>
 #include <fcntl.h>
 #include <map>
-#include <libelfin/elf/elf++.hh>
 #include <vector>
 #include "cte.h"
 
@@ -156,6 +160,31 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
         return 0;
     }
 
+    struct stat sb;
+    if (fstat(fd, &sb) == -1)
+        return CTE_ERROR_ELF;
+
+    void *addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (addr == MAP_FAILED)
+        return CTE_ERROR_ELF;
+
+    if (elf_version(EV_CURRENT) == EV_NONE)
+        return CTE_ERROR_ELF;
+
+    Elf *elf = elf_begin(fd, ELF_C_READ, NULL);
+    if (!elf)
+        return CTE_ERROR_ELF;
+
+    if (elf_kind(elf) != ELF_K_ELF)
+        return CTE_ERROR_ELF;
+
+    // Get section header string table index
+    size_t shstrndx;
+    if (elf_getshdrstrndx(elf, &shstrndx) != 0)
+        return 7;
+
+    Elf_Scn *section;
+
     // Find the text segment
     void *text_vaddr = NULL;
     size_t text_size = 0;
@@ -171,36 +200,41 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
         }
     }
 
-    elf::elf obj(elf::create_mmap_loader(fd));
-
     // Collect function metadata from compiler plugin
     struct cte_info_fn *info_fns = NULL;
     size_t info_fns_count = 0;
     void *essential_sec_vaddr = NULL;
     size_t essential_sec_size = 0;
-    for (auto &sec : obj.sections()) {
-        if (sec.get_name() == ".cte_fn") {
-            void *addr = cte_get_vaddr(info, sec.get_hdr().addr);
+    section = NULL;
+    while ((section = elf_nextscn(elf, section)) != NULL) {
+        GElf_Shdr shdr;
+        char *name;
+        if (gelf_getshdr(section, &shdr) != &shdr)
+            return CTE_ERROR_ELF;
+        if ((name = elf_strptr(elf, shstrndx, shdr.sh_name)) == NULL)
+            return CTE_ERROR_ELF;
+
+        if (strcmp(name, ".cte_fn") == 0) {
+            void *addr = cte_get_vaddr(info, shdr.sh_addr);
             info_fns = (struct cte_info_fn*)addr;
-            info_fns_count = sec.size() / sizeof(struct cte_info_fn);
-            printf("fn section: [%s] %s (%p, count: %lu)\n", filename,
-                   sec.get_name().c_str(), info_fns, info_fns_count);
+            info_fns_count = shdr.sh_size / sizeof(struct cte_info_fn);
+            printf("fn section: [%s] %s (%p, count: %lu)\n", filename, name,
+                   info_fns, info_fns_count);
             int rc = cte_fns_init(info_fns, &info_fns_count);
             if (rc < 0)
                 return rc;
             break;
         }
-        if (sec.get_name() == ".cte_essential") {
-            essential_sec_vaddr = cte_get_vaddr(info, sec.get_hdr().addr);
-            essential_sec_size = sec.size();
-            printf("essential section: [%s] %s (%p, %lu)\n",
-                   filename, sec.get_name().c_str(),
+        if (strcmp(name, ".cte_essential") == 0) {
+            essential_sec_vaddr = cte_get_vaddr(info, shdr.sh_addr);
+            essential_sec_size = shdr.sh_size;
+            printf("essential section: [%s] %s (%p, %lu)\n", filename, name,
                    essential_sec_vaddr, essential_sec_size);
         }
-        if (sec.get_name() == ".plt") {
+        if (strcmp(name, ".plt") == 0) {
             plts.push_back({
-                    .vaddr = cte_get_vaddr(info, sec.get_hdr().addr),
-                    .size = sec.size(),
+                    .vaddr = cte_get_vaddr(info, shdr.sh_addr),
+                    .size = shdr.sh_size,
                 });
         }
     }
@@ -214,25 +248,34 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
     struct cte_text *text = &texts.back();
 
     // Collect ELF symbol info
-    for (auto &sec : obj.sections()) {
-        auto sec_type = sec.get_hdr().type;
-        if (sec_type == elf::sht::symtab || sec_type == elf::sht::dynsym) {
-            for (auto sym : sec.as_symtab()) {
-                auto &d = sym.get_data();
+    section = NULL;
+    while ((section = elf_nextscn(elf, section)) != NULL) {
+        GElf_Shdr shdr;
+        if (gelf_getshdr(section , &shdr) != &shdr)
+            return CTE_ERROR_ELF;
+
+        if (shdr.sh_type == SHT_SYMTAB || shdr.sh_type == SHT_DYNSYM) {
+            Elf_Data *data = elf_getdata(section, NULL);
+            int sym_count = shdr.sh_size / shdr.sh_entsize;
+            for (int i = 0; i < sym_count; ++i) {
+                GElf_Sym sym;
+		gelf_getsym(data, i, &sym);
+                char *name = elf_strptr(elf, shdr.sh_link, sym.st_name);
+
                 // Only functions
-                if (d.type() != elf::stt::func) continue;
-                if (d.size == 0) continue;
+                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC) continue;
+                if (sym.st_size == 0) continue;
 
                 struct cte_function f = {
-                    .name = sym.get_name(),
-                    .size = d.size,
-                    .vaddr = (void*)((uintptr_t)info->dlpi_addr + d.value),
+                    .name = name,
+                    .size = sym.st_size,
+                    .vaddr = (void*)((uintptr_t)info->dlpi_addr + sym.st_value),
                     .body = NULL,
                     .info_fn = NULL,
                     .essential = false,
                 };
 
-                f.body = malloc(d.size);
+                f.body = malloc(sym.st_size);
                 memcpy(f.body, f.vaddr, f.size);
 
                 if (text->info_fns)
@@ -278,13 +321,6 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
 
                 functions[f.vaddr] = f;
 
-                // if (text->info_fns) {
-                //     printf("fn: [%s] %s (%p, %lx) %d\n",
-                //            filename,
-                //            f.name.c_str(),
-                //            f.vaddr, f.size,
-                //            f.essential);
-                // }
                 if ((char*)f.vaddr + f.size > (char*)text->vaddr + text->size)
                     printf("WARNING: exceeds text\n");
             }
