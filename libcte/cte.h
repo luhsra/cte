@@ -1,5 +1,6 @@
-#ifndef _CTE_H_
-#define _CTE_H_
+// This is the public API of libcte
+
+#pragma once
 
 enum cte_error {
     CTE_ERROR_ELF = -1,
@@ -11,5 +12,3 @@ enum cte_error {
 int cte_init(void);
 
 int cte_wipe(void);
-
-#endif

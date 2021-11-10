@@ -1,9 +1,7 @@
 #define _GNU_SOURCE
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
@@ -15,47 +13,7 @@
 #include <elf.h>
 #include <gelf.h>
 #include "cte.h"
-
-struct cte_info_fn {
-    void *vaddr;
-    int flags;
-    int calles_count;
-    void **callees;
-};
-typedef struct cte_info_fn cte_info_fn;
-
-struct cte_text {
-    struct cte_info_fn *info_fns;
-    size_t info_fns_count;
-    void *vaddr;
-    size_t size;
-};
-typedef struct cte_text cte_text;
-
-struct cte_function {
-    char *name;
-    size_t size;
-    void *vaddr;
-    void *body;
-    struct cte_info_fn *info_fn;
-    bool essential;
-};
-typedef struct cte_function cte_function;
-
-struct cte_plt {
-    void *vaddr;
-    size_t size;
-};
-typedef struct cte_plt cte_plt;
-
-struct cte_vector {
-    void *front;
-    size_t length;
-};
-typedef struct cte_vector cte_vector;
-
-static const int FLAG_ADDRESS_TAKEN = (1 << 1);
-static const int FLAG_DEFINITION = (1 << 0);
+#include "cte-impl.h"
 
 static cte_vector texts;     // vector of cte_text
 static cte_vector plts;      // vector of cte_plt
@@ -91,7 +49,7 @@ static int cte_find_compare_info_fn(const void *addr, const void *element) {
         return 1;
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void *cte_align_to_page(void *addr) {
     static size_t page_size = 0;
     if (page_size == 0) {
@@ -151,7 +109,7 @@ static int cte_sort_compare_function(const void *e1, const void *e2) {
     return 0;
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static int cte_find_compare_function(const void *addr, const void *element) {
     cte_function *el = (cte_function*)element;
     if (addr == el->vaddr)
@@ -162,7 +120,7 @@ static int cte_find_compare_function(const void *addr, const void *element) {
         return 1;
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static int cte_find_compare_in_function(const void *addr, const void *element) {
     cte_function *el = (cte_function*)element;
     if (addr >= el->vaddr && (uint8_t*)addr < ((uint8_t*)el->vaddr + el->size))
@@ -374,7 +332,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     return 0;
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void cte_modify_begin(void *start, size_t size) {
     uint8_t *stop = (uint8_t*)start + size;
     uint8_t *aligned_start = cte_align_to_page(start);
@@ -382,7 +340,7 @@ static void cte_modify_begin(void *start, size_t size) {
     mprotect(aligned_start, len, PROT_READ | PROT_WRITE | PROT_EXEC);
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void cte_modify_end(void *start, size_t size) {
     uint8_t *stop = (uint8_t*)start + size;
     uint8_t *aligned_start = cte_align_to_page(start);
@@ -391,7 +349,7 @@ static void cte_modify_end(void *start, size_t size) {
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void *cte_decode_plt(void *entry) {
     uint8_t *a = (uint8_t*)entry;
     if (a[0] != 0xff)
@@ -457,7 +415,7 @@ static int cte_restore(void *addr, void *call_addr) {
     return 0;
 }
 
-__attribute__((section(".cte_essential"), naked))
+CTE_ESSENTIAL_NAKED
 static void cte_restore_entry(void) {
     asm("pushq %rdi\n"
         "pushq %rsi\n"
@@ -501,7 +459,7 @@ static void cte_restore_entry(void) {
         "ret\n");
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void cte_wipe_fn(void *start, size_t size) {
     if (size < 12)
         return;
@@ -525,7 +483,7 @@ int cte_init(void) {
     return 0;
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 int cte_wipe(void) {
     cte_text *text = texts.front;
     cte_function *fs = functions.front;
