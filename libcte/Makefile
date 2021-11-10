@@ -1,6 +1,6 @@
-CC := g++
+CC := gcc
 CCFLAGS += -Wall -Wextra -O2 -ggdb
-SOURCES = $(wildcard *.cc)
+SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCT = libcte.a
 
@@ -9,7 +9,7 @@ PRODUCT = libcte.a
 $(PRODUCT): $(OBJECTS)
 	ar rcs $@ $^
 
-%.o: %.cc
+%.o: %.c
 	$(CC) $(CCFLAGS) -c -o $@ $<
 
 clean:

@@ -1,5 +1,4 @@
 CC := gcc
-CXX := g++
 
 PLUGIN_DIR=../gcc-plugin
 PLUGIN=$(PLUGIN_DIR)/cte.so
@@ -15,7 +14,7 @@ PRODUCT = test
 .PHONY: clean always
 
 $(PRODUCT): $(OBJECTS) $(LIBRARY)
-	$(CXX) $(LDFLAGS) $^ -o $@
+	$(CC) $(LDFLAGS) $^ -o $@
 
 $(LIBRARY): always
 	$(MAKE) -C $(LIBRARY_DIR)
