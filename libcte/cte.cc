@@ -17,45 +17,7 @@
 #include <map>
 #include <vector>
 #include "cte.h"
-
-struct cte_info_fn {
-    void *vaddr;
-    int flags;
-    int calles_count;
-    void **callees;
-};
-
-struct cte_text {
-    cte_info_fn *info_fns;
-    size_t info_fns_count;
-    void *vaddr;
-    size_t size;
-};
-
-struct cte_function {
-    std::string name;
-    size_t size;
-    void *vaddr;
-    void *body;
-    cte_info_fn *info_fn;
-    bool essential;
-
-    void reload() {
-        memcpy(vaddr, body, size);
-    }
-
-    void kill() {
-        memset(vaddr, 0xcc, size);
-    }
-};
-
-struct cte_plt {
-    void *vaddr;
-    size_t size;
-};
-
-static const int FLAG_ADDRESS_TAKEN = (1 << 1);
-static const int FLAG_DEFINITION = (1 << 0);
+#include "cte-impl.hh"
 
 static std::vector<cte_text> texts;
 static std::map<void*, cte_function> functions;
@@ -96,7 +58,7 @@ static struct cte_info_fn *cte_find(struct cte_text *text, void *addr) {
 //     return ptr - text->info_fns;
 // }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void *cte_align_to_page(void *addr) {
     static size_t page_size = 0;
     if (page_size == 0) {
@@ -259,7 +221,7 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
             int sym_count = shdr.sh_size / shdr.sh_entsize;
             for (int i = 0; i < sym_count; ++i) {
                 GElf_Sym sym;
-		gelf_getsym(data, i, &sym);
+                gelf_getsym(data, i, &sym);
                 char *name = elf_strptr(elf, shdr.sh_link, sym.st_name);
 
                 // Only functions
@@ -329,7 +291,7 @@ static int callback(struct dl_phdr_info *info, size_t, void *data) {
     return 0;
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void cte_modify_begin(void *start, size_t size) {
     char *stop = (char*)start + size;
     char *aligned_start = (char*)cte_align_to_page(start);
@@ -337,7 +299,7 @@ static void cte_modify_begin(void *start, size_t size) {
     mprotect(aligned_start, len, PROT_READ | PROT_WRITE | PROT_EXEC);
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void cte_modify_end(void *start, size_t size) {
     char *stop = (char*)start + size;
     char *aligned_start = (char*)cte_align_to_page(start);
@@ -346,7 +308,7 @@ static void cte_modify_end(void *start, size_t size) {
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void *decode_plt(void *entry) {
     unsigned char *a = (unsigned char*)entry;
     if (a[0] != 0xff)
@@ -359,10 +321,9 @@ static void *decode_plt(void *entry) {
     return (void*)(*got_entry);
 }
 
-extern "C" {
-    __attribute__((section(".cte_essential"), used))
-    static int cte_restore(void *addr, void *call_addr) {
-        // Find the function
+CTE_ESSENTIAL
+int cte_restore(void *addr, void *call_addr) {
+    // Find the function
         if (functions.count(addr) != 1)
             asm("int3\n");
         struct cte_function *f = &functions[addr];
@@ -412,10 +373,9 @@ extern "C" {
         cte_modify_end(addr, f->size);
         return 0;
     }
-}
 
-__attribute__((section(".cte_essential"), naked))
-static void cte_restore_entry(void) {
+CTE_ESSENTIAL_NAKED
+void cte_restore_entry(void) {
     asm("pushq %rdi\n"
         "pushq %rsi\n"
 
@@ -458,7 +418,7 @@ static void cte_restore_entry(void) {
         "ret\n");
 }
 
-__attribute__((section(".cte_essential")))
+CTE_ESSENTIAL
 static void cte_wipe_fn(void *start, size_t size) {
     if (size < 12)
         return;
@@ -474,8 +434,7 @@ static void cte_wipe_fn(void *start, size_t size) {
     memset(fn + 12, 0xcc, size - 12);
 }
 
-extern "C" {
-    int cte_init(void) {
+int cte_init(void) {
         extern char *__progname;
         int rc = dl_iterate_phdr(callback, __progname);
         if (rc < 0)
@@ -483,37 +442,43 @@ extern "C" {
         return 0;
     }
 
-    __attribute__((section(".cte_essential")))
-    int cte_wipe(void) {
-        // FIXME
-        struct cte_text *text = &texts.front();
-        struct cte_text *text_stop = &texts.back();
+CTE_ESSENTIAL
+int cte_wipe(void) {
+    // FIXME
+    struct cte_text *text = &texts.front();
+    struct cte_text *text_stop = &texts.back();
 
-        static std::vector<cte_function> funcs;
-        if (funcs.empty()) {
-            for(auto item : functions)
-                funcs.push_back(item.second);
-        }
-        struct cte_function *func = &funcs.front();
-        struct cte_function *func_stop = &funcs.back();
-        // FIXME: front, back -> empty
-
-        ////////////////////////////////////////////////////
-        // (no libstdc++ code below)
-
-        for (auto it = text; it <= text_stop; it++)
-            cte_modify_begin(it->vaddr, it->size);
-
-        for (auto it = func; it <= func_stop; it++) {
-            if (!it->essential)
-                cte_wipe_fn(it->vaddr, it->size);
-        }
-
-        for (auto it = text; it <= text_stop; it++)
-            cte_modify_end(it->vaddr, it->size);
-        return 0;
+    static std::vector<cte_function> funcs;
+    if (funcs.empty()) {
+        for(auto item : functions)
+            funcs.push_back(item.second);
     }
+    struct cte_function *func = &funcs.front();
+    struct cte_function *func_stop = &funcs.back();
+    // FIXME: front, back -> empty
+
+    ////////////////////////////////////////////////////
+    // (no libstdc++ code below)
+
+    for (auto it = text; it <= text_stop; it++) {
+        cte_modify_begin(it->vaddr, it->size);
+    }
+
+    for (auto it = func; it <= func_stop; it++) {
+        printf("%s %p+%lu\n", it->name.c_str(), it->vaddr, it->size);
+    }
+
+
+    for (auto it = func; it <= func_stop; it++) {
+        if (!it->essential)
+            cte_wipe_fn(it->vaddr, it->size);
+    }
+
+    for (auto it = text; it <= text_stop; it++)
+        cte_modify_end(it->vaddr, it->size);
+    return 0;
 }
+
 
 // static void cte_graph_keep(struct cte_info_fn *info, bool *keep_entries) {
 //     size_t index = cte_info_fn_index(info);

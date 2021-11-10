@@ -7,7 +7,8 @@ LIBRARY_DIR=../libcte
 LIBRARY=$(LIBRARY_DIR)/libcte.a
 
 CCFLAGS += -Wall -Wextra -fplugin=$(PLUGIN) -I$(LIBRARY_DIR) -ggdb -O0
-LDFLAGS += -L$(LIBRARY_DIR) -lelf
+LDFLAGS += -L$(LIBRARY_DIR)
+LIBS    += -lelf
 SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCT = test
@@ -15,7 +16,7 @@ PRODUCT = test
 .PHONY: clean always
 
 $(PRODUCT): $(OBJECTS) $(LIBRARY)
-	$(CXX) $(LDFLAGS) $^ -o $@
+	$(CXX) $(LDFLAGS) $^ -o $@ ${LIBS}
 
 $(LIBRARY): always
 	$(MAKE) -C $(LIBRARY_DIR)
