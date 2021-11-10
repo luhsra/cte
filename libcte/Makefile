@@ -1,5 +1,5 @@
 CC := gcc
-CCFLAGS += -Wall -Wextra -O2 -ggdb
+CFLAGS += -Wall -Wextra -O2 -ggdb
 SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCT = libcte.a
