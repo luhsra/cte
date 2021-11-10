@@ -167,11 +167,15 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     if (info->dlpi_name[0] != '\0')
         filename = (char*)info->dlpi_name;
 
+    if (!strcmp(filename, "linux-vdso.so.1"))
+        return 0;
+
     // Open the object file
     int fd = open(filename, O_RDONLY);
     if (fd < 0) {
         // FIXME
         // fprintf(stderr, "Could not open: %s\n", fn, strerror(errno));
+        cte_die("Could not open file: %s\n", filename);
         return 0;
     }
 
