@@ -29,11 +29,15 @@ int test2(int x) {
     return y;
 }
 
+int mini(int x) {
+    return x;
+}
+
 int test1(void);
 
 int rec(int i) {
     if (i <= 0)
-        return 42;
+        return mini(0);
     return rec(i - 1);
 }
 

@@ -75,3 +75,5 @@ static void cte_restore_entry(void);
         ptr->mov_imm == (uint64_t)cte_restore_entry &&\
         ptr->icall[0] == 0xff &&                      \
         ptr->icall[1] == 0xd0)
+
+#define CTE_MAX_FUNC_ALIGN 16

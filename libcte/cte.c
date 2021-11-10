@@ -41,6 +41,11 @@ static void *cte_vector_get(cte_vector *vector, uint32_t idx) {
     return vector->front + vector->element_size * idx;
 }
 
+#define for_each_cte_vector(vector, elem)                    \
+    for (elem = (vector)->front;                             \
+         (void*)elem < (vector)->front + ((vector)->element_size) * (vector)->length; \
+         elem = (void*) elem + ((vector)->element_size))
+
 
 static int cte_sort_compare_info_fn(const void *e1, const void *e2) {
     cte_info_fn *a = (cte_info_fn*)e1;
@@ -513,6 +518,43 @@ int cte_init(void) {
     int rc = dl_iterate_phdr(cte_callback, __progname);
     if (rc < 0)
         return rc;
+
+    // Enlarge the functions sizes, if they are followed by NOPs
+    const struct {uint8_t len; uint8_t opcode[8]; } nop_codes[] = {
+        {1, {0x90}},
+        {3, {0x0f, 0x1f, 0x00}},
+        {4, {0x0f, 0x1f, 0x40, 0x00}},
+        {5, {0x0f, 0x1f, 0x44, 0x00, 0x00}},
+        {7, {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00}},
+    };
+    cte_function *func;
+    for_each_cte_vector(&functions, func) {
+        // if (strcmp(func->name, "mini")) continue;
+        uint8_t *P = func->vaddr + func->size;
+        uint8_t I = 0;
+        while((uintptr_t )P & (CTE_MAX_FUNC_ALIGN -1)) { // As long as we are not aligned
+            // Search for NOP opcode
+            uint8_t nop_len = 0;
+            for (unsigned idx = 0; idx < sizeof(nop_codes) / sizeof(*nop_codes); idx++) {
+                unsigned i = 0;
+                while (i < nop_codes[idx].len && P[I + i] == nop_codes[idx].opcode[i]) {
+                    i ++;
+                }
+                if (i == nop_codes[idx].len) {
+                    nop_len = nop_codes[idx].len;
+                    break;
+                }
+            }
+            if (nop_len) {
+                I += nop_len;
+            } else {
+                break;
+            }
+        }
+        // Enlarge this function to include nops
+        func->size += I;
+    }
+
     return 0;
 }
 
