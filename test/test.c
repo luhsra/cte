@@ -56,7 +56,7 @@ int rec(int i) {
 /* } */
 
 int main(void) {
-    int fd = open("test.dict", O_RDWR|O_CREAT, 0644);
+    int fd = open("test.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
     int rc = cte_init();
     if (rc < 0) {
         perror("CTE Error");

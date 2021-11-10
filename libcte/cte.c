@@ -311,6 +311,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     // Find the text segment
     void *text_vaddr = NULL;
     size_t text_size = 0;
+    ElfW(Off) text_offset = 0;
     for (int j = 0; j < info->dlpi_phnum; j++) {
         const ElfW(Phdr) *phdr = &info->dlpi_phdr[j];
         if (phdr->p_type != PT_LOAD) continue;
@@ -319,6 +320,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                 return CTE_ERROR_FORMAT;
             text_vaddr = cte_get_vaddr(info, phdr->p_vaddr);
             text_size = phdr->p_memsz;
+            text_offset = phdr->p_offset;
             printf("segment: [%s] %p, %lu\n", filename, text_vaddr, text_size);
         }
     }
@@ -369,6 +371,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         .info_fns = info_fns,
         .info_fns_count = info_fns_count,
         .vaddr = text_vaddr,
+        .offset = text_offset,
         .size = text_size,
     };
     if(!text->filename) cte_die("strdup failed");
@@ -710,10 +713,12 @@ void cte_dump_state(int fd) {
             if (cte_implant_valid(implant))
                 loaded = false;
         }
+        cte_text *text = cte_vector_get(&texts, func->text_idx);
 
-        cte_fdprintf(fd, "    [%d, \"%s\", %d, %d],\n",
+        cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s],\n",
                      func->text_idx, func->name, func->size,
-                     loaded);
+                     func->vaddr - text->vaddr + text->offset,
+                     loaded ? "True": "False");
     }
     cte_fdprintf(fd, "  ],\n");
 

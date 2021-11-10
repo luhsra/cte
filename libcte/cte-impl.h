@@ -21,6 +21,7 @@ struct cte_text {
     struct cte_info_fn *info_fns;
     size_t info_fns_count;
     void *vaddr;
+    size_t offset;
     size_t size;
 };
 typedef struct cte_text cte_text;
