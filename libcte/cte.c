@@ -159,6 +159,116 @@ static int cte_find_compare_in_function(const void *addr, const void *element) {
         return 1;
 }
 
+static
+Elf * cte_elf_begin(int fd) {
+    if (elf_version(EV_CURRENT) == EV_NONE)
+        return NULL;
+
+    Elf *elf = elf_begin(fd, ELF_C_READ, NULL);
+    if (!elf)
+        return NULL;
+
+    if (elf_kind(elf) != ELF_K_ELF) {
+        elf_end(elf);
+        return NULL;
+    }
+    return elf;
+}
+
+static unsigned
+cte_elf_scan_symbols(Elf *elf, cte_text * text, ElfW(Addr) dlpi_addr) {
+    unsigned ret = 0;
+    // Collect Symbols
+    Elf_Scn* section = NULL;
+    while ((section = elf_nextscn(elf, section)) != NULL) {
+        GElf_Shdr shdr;
+        if (gelf_getshdr(section , &shdr) != &shdr)
+            return 0;
+
+        if (shdr.sh_type == SHT_SYMTAB || shdr.sh_type == SHT_DYNSYM) {
+            Elf_Data *data = elf_getdata(section, NULL);
+            int sym_count = shdr.sh_size / shdr.sh_entsize;
+            for (int i = 0; i < sym_count; ++i) {
+                GElf_Sym sym;
+                gelf_getsym(data, i, &sym);
+                char *name = strdup(elf_strptr(elf, shdr.sh_link, sym.st_name));
+
+                // Only functions
+                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC) continue;
+                if (sym.st_size == 0) continue;
+
+                cte_function f = {
+                    .text_idx  = text - (cte_text *)texts.front,
+                    .name      = name,
+                    .size      = sym.st_size,
+                    .vaddr     = (void*)((uintptr_t)dlpi_addr + sym.st_value),
+                    .body      = NULL,
+                    .info_fn   = NULL,
+                    .essential = false,
+                };
+
+                // Push Function
+                cte_function *fs = cte_vector_push(&functions);
+                *fs = f;
+                ret ++;
+            }
+        }
+    }
+    return ret;
+}
+
+
+static
+void cte_handle_build_id(struct dl_phdr_info *info, cte_text *text, int j) {
+    struct build_id_note *build_id = NULL;
+    struct build_id_note *note = (void *)(info->dlpi_addr +
+                                          info->dlpi_phdr[j].p_vaddr);
+    ptrdiff_t len = info->dlpi_phdr[j].p_filesz;
+    
+    while (len >= (int)sizeof(struct build_id_note)) {
+        if (note->nhdr.n_type == NT_GNU_BUILD_ID &&
+            note->nhdr.n_descsz != 0 &&
+            note->nhdr.n_namesz == 4 &&
+            memcmp(note->name, "GNU", 4) == 0) {
+            build_id = note;
+            break;
+        }
+        
+#define ALIGN(val, align)       (((val) + (align) - 1) & ~((align) - 1))
+        size_t offset = sizeof(ElfW(Nhdr)) +
+            ALIGN(note->nhdr.n_namesz, 4) +
+            ALIGN(note->nhdr.n_descsz, 4);
+#undef ALIGN
+        note = (struct build_id_note *)((char *)note + offset);
+        len -= offset;
+    }
+
+    // No build ID found
+    if (!build_id) return;
+
+    char filename[note->nhdr.n_descsz + 1 + 100];
+    char *p = filename;
+    p += cte_sprintf(p, "/usr/lib/debug/.build-id/%02x/", build_id->build_id[0]);
+
+    for (unsigned i = 1; i < note->nhdr.n_descsz; i++) {
+        p += cte_sprintf(p, "%02x", build_id->build_id[i]);
+    }
+    p += cte_sprintf(p, ".debug");
+
+    // Open the debug file
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) return;
+
+    Elf *elf = cte_elf_begin(fd);
+    if (! elf) return;
+
+    unsigned count = cte_elf_scan_symbols(elf, text, info->dlpi_addr);
+
+    cte_printf("Loaded debug info with %d symbols (%s)\n", count, filename);
+
+    elf_end (elf);
+}
+
 static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     (void)_size;
 
@@ -187,14 +297,8 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     if (eaddr == MAP_FAILED)
         return CTE_ERROR_ELF;
 
-    if (elf_version(EV_CURRENT) == EV_NONE)
-        return CTE_ERROR_ELF;
-
-    Elf *elf = elf_begin(fd, ELF_C_READ, NULL);
+    Elf *elf = cte_elf_begin(fd);
     if (!elf)
-        return CTE_ERROR_ELF;
-
-    if (elf_kind(elf) != ELF_K_ELF)
         return CTE_ERROR_ELF;
 
     // Get section header string table index
@@ -208,12 +312,6 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     void *text_vaddr = NULL;
     size_t text_size = 0;
     for (int j = 0; j < info->dlpi_phnum; j++) {
-        //if (info->dlpi_phdr[i].p_type == PT_NOTE) {
-        //    struct build_id_note *note = (void *)(info->dlpi_addr +
-        //                                          info->dlpi_phdr[i].p_vaddr);
-        //    continue
-        //}
-        
         const ElfW(Phdr) *phdr = &info->dlpi_phdr[j];
         if (phdr->p_type != PT_LOAD) continue;
         if (phdr->p_flags & PF_X) {
@@ -223,8 +321,6 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             text_size = phdr->p_memsz;
             printf("segment: [%s] %p, %lu\n", filename, text_vaddr, text_size);
         }
-
-        
     }
 
     // Collect function metadata from compiler plugin
@@ -278,102 +374,86 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     if(!text->filename) cte_die("strdup failed");
 
     // Collect ELF symbol info
-    section = NULL;
-    while ((section = elf_nextscn(elf, section)) != NULL) {
-        GElf_Shdr shdr;
-        if (gelf_getshdr(section , &shdr) != &shdr)
-            return CTE_ERROR_ELF;
+    cte_elf_scan_symbols(elf, text, info->dlpi_addr);
 
-        if (shdr.sh_type == SHT_SYMTAB || shdr.sh_type == SHT_DYNSYM) {
-            Elf_Data *data = elf_getdata(section, NULL);
-            int sym_count = shdr.sh_size / shdr.sh_entsize;
-            for (int i = 0; i < sym_count; ++i) {
-                GElf_Sym sym;
-                gelf_getsym(data, i, &sym);
-                char *name = strdup(elf_strptr(elf, shdr.sh_link, sym.st_name));
-
-                // Only functions
-                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC) continue;
-                if (sym.st_size == 0) continue;
-
-                cte_function f = {
-                    .text_idx = text - (cte_text *)texts.front,
-                    .name = name,
-                    .size = sym.st_size,
-                    .vaddr = (void*)((uintptr_t)info->dlpi_addr + sym.st_value),
-                    .body = NULL,
-                    .info_fn = NULL,
-                    .essential = false,
-                };
-
-                f.body = malloc(sym.st_size);
-                memcpy(f.body, f.vaddr, f.size);
-
-                if (text->info_fns)
-                    f.info_fn = bsearch(f.vaddr, text->info_fns,
-                                        text->info_fns_count,
-                                        sizeof(cte_info_fn),
-                                        cte_find_compare_info_fn);
-
-                if (essential_sec_vaddr)
-                    f.essential = (f.vaddr >= essential_sec_vaddr) &&
-                        ((uint8_t*)f.vaddr < (uint8_t*)essential_sec_vaddr + essential_sec_size);
-                // FIXME
-                if (strcmp(f.name, "_start") == 0 ||
-                    strcmp(f.name, "__libc_start_main") == 0 ||
-                    strcmp(f.name, "main") == 0 ||
-                    strcmp(f.name, "syscall") == 0 ||
-
-
-                    // mprotect
-                    strcmp(f.name, "mprotect") == 0 ||
-                    strcmp(f.name, "pkey_mprotect") == 0 ||
-                    strcmp(f.name, "__mprotect") == 0 ||
-
-                    // memcpy
-                    strcmp(f.name, "memcpy@GLIBC_2.2.5") == 0 ||
-                    strcmp(f.name, "__memcpy_avx_unaligned_erms") == 0 ||
-
-                    // memset
-                    strcmp(f.name, "__memcmp_sse4_1") == 0 ||
-                    strcmp(f.name, "__memset_avx2_erms") == 0 ||
-                    strcmp(f.name, "__memset_avx2_unaligned_erms") == 0 ||
-                    strcmp(f.name, "__wmemset_chk_avx2_unaligned") == 0 ||
-                    strcmp(f.name, "__wmemset_avx2_unaligned") == 0 ||
-                    strcmp(f.name, "__memset_chk_avx2_unaligned") == 0 ||
-                    strcmp(f.name, "__memset_avx2_unaligned") == 0 ||
-                    strcmp(f.name, "__memset_chk_avx2_unaligned_erms") == 0 ||
-                    strcmp(f.name, "__wmemcmp_avx2_movbe") == 0 ||
-                    strcmp(f.name, "__wmemchr_avx2") == 0 ||
-
-                    // restore
-                    strcmp(f.name, "bsearch") == 0) {
-                    f.essential = true;
-                }
-
-                if ((uint8_t*)f.vaddr + f.size > (uint8_t*)text->vaddr + text->size)
-                    printf("WARNING: exceeds text\n");
-
-                // Add new function if not already registered (aliases)
-                cte_function *old = bsearch(f.vaddr, functions.front,
-                                            functions.length,
-                                            sizeof(cte_function),
-                                            cte_find_compare_function);
-                if (old) {
-                    old->essential |= f.essential;
-                } else {
-                    cte_function *fs = cte_vector_push(&functions);
-                    *fs = f;
-
-                    // Sort functions
-                    // FIXME: performance: only sort once; handle duplicates later
-                    qsort(functions.front, functions.length,
-                          sizeof(cte_function),
-                          cte_sort_compare_function);
-                }
-            }
+    // Collect info from debug file, if build id is present
+    // Read Symbols from debug info
+    for (int j = 0; j < info->dlpi_phnum; j++) {
+        if (info->dlpi_phdr[j].p_type == PT_NOTE) {
+            cte_handle_build_id(info, text, j);
         }
     }
+
+    // Step 1: Sort by vaddr
+    qsort(functions.front, functions.length,
+          sizeof(cte_function),
+          cte_sort_compare_function);
+
+    // Step 2: Mark essential functions, Identify Duplicates, copy body
+    cte_function *function = NULL, *it;
+    for_each_cte_vector(&functions, it) {
+        if (it->text_idx != (text - (cte_text *)texts.front)) continue; // From previous library
+
+        if ((uint8_t*)it->vaddr + it->size > (uint8_t*)text->vaddr + text->size)
+            cte_die("function exceeds text segment: %s\n", it->name);
+
+        // Identify Duplicates
+        if (!function || function->vaddr != it->vaddr) {
+            function = it;
+        } else {
+            // cte_debug("duplicate: %s %s\n", function->name, it->name);
+        }
+
+        // Function is an essential sections?
+        if (essential_sec_vaddr) {
+            function->essential |= (it->vaddr >= essential_sec_vaddr) &&
+                ((uint8_t*)it->vaddr < (uint8_t*)essential_sec_vaddr + essential_sec_size);
+        }
+
+        // Does this function have an essential name?
+        struct { char begin; char *pattern; } names[] = {
+            {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"},
+            // mprotect
+            {0, "mprotect"}, {0, "pkey_mprotect"}, {0, "__mprotect"},
+            // memcpy
+            {0, "memcpy@GLIBC_2.2.5"}, {0, "__memcpy_avx_unaligned_erms"},
+            // memset
+            {1, "__memcmp"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
+            // restore
+            {0, "bsearch"},
+        };
+        for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
+            if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
+                function->essential |= true;
+                break;
+            }
+            if (names[i].begin == 1 && strncmp(names[i].pattern, it->name, strlen(names[i].pattern)) == 0) {
+                function->essential |= true;
+                break;
+            }
+        }
+        if (function->essential) {
+            //cte_debug("essential: %s %d\n", it->name, function->essential);
+        }
+
+        if (function == it) {
+            // Copy the body
+            function->body = malloc(function->size);
+            if(!function->body) cte_die("malloc failed");
+            memcpy(function->body, function->vaddr, function->size);
+
+            if (text->info_fns) {
+                function->info_fn = bsearch(function->vaddr, text->info_fns,
+                                            text->info_fns_count,
+                                            sizeof(cte_info_fn),
+                                            cte_find_compare_info_fn);
+            }
+        } else {
+            // FIXME: Eliminate duplicates
+        }
+    }
+
+    elf_end (elf);
     return 0;
 }
 
@@ -563,10 +643,12 @@ int cte_init(void) {
     };
     cte_function *func;
     for_each_cte_vector(&functions, func) {
+        if (!func->body) continue; // Aliases
+        
         // if (strcmp(func->name, "mini")) continue;
         uint8_t *P = func->vaddr + func->size;
         uint8_t I = 0;
-        while((uintptr_t )P & (CTE_MAX_FUNC_ALIGN -1)) { // As long as we are not aligned
+        while((uintptr_t )&P[I] & (CTE_MAX_FUNC_ALIGN -1)) { // As long as we are not aligned
             // Search for NOP opcode
             bool found = false;
             for (unsigned idx = 0; idx < sizeof(nop_codes) / sizeof(*nop_codes); idx++) {
@@ -577,6 +659,9 @@ int cte_init(void) {
                 }
             }
             if (! found) break;
+            if (!strcmp(func->name, "svctcp_rendezvous_abort")) {
+                cte_debug("%s %d - %d\n", func->name, func->size, I);
+            }
         }
         // Enlarge this function to include nops
         func->size += I;
@@ -594,7 +679,7 @@ int cte_wipe(void) {
         cte_modify_begin(t->vaddr, t->size);
 
     for (cte_function *f = fs; f < fs + functions.length; f++) {
-        if (!f->essential)
+        if (f->body && !f->essential)
             cte_wipe_fn(f);
     }
 
@@ -617,6 +702,8 @@ void cte_dump_state(int fd) {
     cte_function *func;
     cte_fdprintf(fd, "  \"functions\": [\n");
     for_each_cte_vector(&functions, func) {
+        if (!func->body) continue;
+        
         cte_implant *implant = func->vaddr;
         bool loaded = true;
         if (func->size >= sizeof(cte_implant)) {
