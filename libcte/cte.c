@@ -20,6 +20,13 @@ static cte_vector texts;     // vector of cte_text
 static cte_vector plts;      // vector of cte_plt
 static cte_vector functions; // vector of cte_function
 
+struct build_id_note {
+    ElfW(Nhdr) nhdr;
+
+    char name[4];
+    uint8_t build_id[0];
+};
+
 static void cte_vector_init(cte_vector *vector, size_t element_size) {
     vector->length = 0;
     vector->element_size = element_size;
@@ -197,6 +204,12 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     void *text_vaddr = NULL;
     size_t text_size = 0;
     for (int j = 0; j < info->dlpi_phnum; j++) {
+        //if (info->dlpi_phdr[i].p_type == PT_NOTE) {
+        //    struct build_id_note *note = (void *)(info->dlpi_addr +
+        //                                          info->dlpi_phdr[i].p_vaddr);
+        //    continue
+        //}
+        
         const ElfW(Phdr) *phdr = &info->dlpi_phdr[j];
         if (phdr->p_type != PT_LOAD) continue;
         if (phdr->p_flags & PF_X) {
@@ -206,6 +219,8 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             text_size = phdr->p_memsz;
             printf("segment: [%s] %p, %lu\n", filename, text_vaddr, text_size);
         }
+
+        
     }
 
     // Collect function metadata from compiler plugin
@@ -270,7 +285,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             int sym_count = shdr.sh_size / shdr.sh_entsize;
             for (int i = 0; i < sym_count; ++i) {
                 GElf_Sym sym;
-		gelf_getsym(data, i, &sym);
+                gelf_getsym(data, i, &sym);
                 char *name = strdup(elf_strptr(elf, shdr.sh_link, sym.st_name));
 
                 // Only functions
@@ -498,8 +513,10 @@ static void cte_wipe_fn(cte_function *fn) {
     cte_implant *implant = fn->vaddr;
 
     if (fn->size < sizeof(cte_implant)) {
-        // cte_debug("function %s not large enough for implant (%d < %d)\n",
-        //           fn->name, fn->size, sizeof(cte_implant));
+        cte_text *text = cte_vector_get(&texts, fn->text_idx);
+        if(!text) cte_die("idiot");
+        cte_debug("function %s/%s not large enough for implant (%d < %d)\n",
+                  text->filename, fn->name, fn->size, sizeof(cte_implant));
         return;
     }
 
@@ -523,12 +540,22 @@ int cte_init(void) {
         return rc;
 
     // Enlarge the functions sizes, if they are followed by NOPs
-    const struct {uint8_t len; uint8_t opcode[8]; } nop_codes[] = {
-        {1, {0x90}},
-        {3, {0x0f, 0x1f, 0x00}},
-        {4, {0x0f, 0x1f, 0x40, 0x00}},
-        {5, {0x0f, 0x1f, 0x44, 0x00, 0x00}},
-        {7, {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00}},
+    const struct {uint8_t len; uint8_t opcode[15]; } nop_codes[] = {
+        {1,  {0x00}},
+        {1,  {0x90}},
+        {2,  {0x66, 0x90}},
+        {2,  {0x3e, 0x90}},
+        {2,  {0x3e, 0x90}},
+        {3,  {0x0f, 0x1f, 0x00}},
+        {3,  {0x0f, 0x19, 0x00}},
+        {4,  {0x0f, 0x1f, 0x40, 0x00}},
+        {5,  {0x0f, 0x1f, 0x44, 0x00, 0x00}},
+        {6,  {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00}},
+        {7,  {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00}},
+        {8,  {0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}},
+        {9,  {0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}},
+        {10, {0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}},
+        {11, {0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}},
     };
     cte_function *func;
     for_each_cte_vector(&functions, func) {
@@ -537,22 +564,15 @@ int cte_init(void) {
         uint8_t I = 0;
         while((uintptr_t )P & (CTE_MAX_FUNC_ALIGN -1)) { // As long as we are not aligned
             // Search for NOP opcode
-            uint8_t nop_len = 0;
+            bool found = false;
             for (unsigned idx = 0; idx < sizeof(nop_codes) / sizeof(*nop_codes); idx++) {
-                unsigned i = 0;
-                while (i < nop_codes[idx].len && P[I + i] == nop_codes[idx].opcode[i]) {
-                    i ++;
-                }
-                if (i == nop_codes[idx].len) {
-                    nop_len = nop_codes[idx].len;
+                if (memcmp(nop_codes[idx].opcode, &P[I], nop_codes[idx].len) == 0) {
+                    I += nop_codes[idx].len;
+                    found = true;
                     break;
                 }
             }
-            if (nop_len) {
-                I += nop_len;
-            } else {
-                break;
-            }
+            if (! found) break;
         }
         // Enlarge this function to include nops
         func->size += I;
