@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <cte.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 
 
 int other1(void);
@@ -51,6 +56,7 @@ int rec(int i) {
 /* } */
 
 int main(void) {
+    int fd = open("test.dict", O_RDWR|O_CREAT, 0644);
     int rc = cte_init();
     if (rc < 0) {
         perror("CTE Error");
@@ -58,6 +64,8 @@ int main(void) {
     }
 
     cte_wipe();
+
+    cte_dump_state(fd);
 
     fnptr = testfnptr;
     test1();

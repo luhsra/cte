@@ -17,6 +17,7 @@ struct cte_info_fn {
 typedef struct cte_info_fn cte_info_fn;
 
 struct cte_text {
+    char *filename;
     struct cte_info_fn *info_fns;
     size_t info_fns_count;
     void *vaddr;
@@ -25,6 +26,7 @@ struct cte_text {
 typedef struct cte_text cte_text;
 
 struct cte_function {
+    uint32_t text_idx; // From which library
     char *name;
     size_t size;
     void *vaddr;

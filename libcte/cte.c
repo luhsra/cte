@@ -250,11 +250,13 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
 
     cte_text *text = cte_vector_push(&texts);
     *text = (cte_text) {
+        .filename = strdup(filename),
         .info_fns = info_fns,
         .info_fns_count = info_fns_count,
         .vaddr = text_vaddr,
         .size = text_size,
     };
+    if(!text->filename) cte_die("strdup failed");
 
     // Collect ELF symbol info
     section = NULL;
@@ -276,6 +278,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                 if (sym.st_size == 0) continue;
 
                 cte_function f = {
+                    .text_idx = text - (cte_text *)texts.front,
                     .name = name,
                     .size = sym.st_size,
                     .vaddr = (void*)((uintptr_t)info->dlpi_addr + sym.st_value),
@@ -495,8 +498,8 @@ static void cte_wipe_fn(cte_function *fn) {
     cte_implant *implant = fn->vaddr;
 
     if (fn->size < sizeof(cte_implant)) {
-        cte_debug("function %s not large enough for implant (%d < %d)\n",
-                  fn->name, fn->size, sizeof(cte_implant));
+        // cte_debug("function %s not large enough for implant (%d < %d)\n",
+        //           fn->name, fn->size, sizeof(cte_implant));
         return;
     }
 
@@ -574,4 +577,34 @@ int cte_wipe(void) {
     for (cte_text *t = text; t <= text + texts.length; t++)
         cte_modify_end(t->vaddr, t->size);
     return 0;
+}
+
+void cte_dump_state(int fd) {
+    cte_fdprintf(fd, "{\n");
+
+    cte_text *text;
+    cte_fdprintf(fd, "  \"texts\": [\n");
+    unsigned idx = 0;
+    for_each_cte_vector(&texts, text) {
+        cte_fdprintf(fd, "    [%d, \"%s\", %d],\n", idx++, text->filename, text->size);
+    }
+    cte_fdprintf(fd, "  ],\n");
+    
+    cte_function *func;
+    cte_fdprintf(fd, "  \"functions\": [\n");
+    for_each_cte_vector(&functions, func) {
+        cte_implant *implant = func->vaddr;
+        bool loaded = true;
+        if (func->size >= sizeof(cte_implant)) {
+            if (cte_implant_valid(implant))
+                loaded = false;
+        }
+
+        cte_fdprintf(fd, "    [%d, \"%s\", %d, %d],\n",
+                     func->text_idx, func->name, func->size,
+                     loaded);
+    }
+    cte_fdprintf(fd, "  ],\n");
+
+    cte_fdprintf(fd, "}\n");
 }

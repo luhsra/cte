@@ -12,3 +12,5 @@ enum cte_error {
 int cte_init(void);
 
 int cte_wipe(void);
+
+void cte_dump_state(int fd);

@@ -23,7 +23,7 @@ enum flag_itoa {
 };
 
 CTE_ESSENTIAL
-static char * sitoa(char * buf, unsigned int num, int width, enum flag_itoa flags)
+static char * sitoa(char * buf, unsigned long long num, int width, enum flag_itoa flags)
 {
     unsigned int base;
     if (flags & BASE_2)
@@ -33,7 +33,7 @@ static char * sitoa(char * buf, unsigned int num, int width, enum flag_itoa flag
     else
         base = 16;
 
-    char tmp[32];
+    char tmp[64];
     char *p = tmp;
     do {
         int rem = num % base;
@@ -90,6 +90,8 @@ int cte_vsprintf(char * buf, const char * fmt, va_list va)
             *(buf++) = '0';
             *(buf++) = 'x';
             // fallthrough
+            buf = sitoa(buf, va_arg(va, uintptr_t), width, flags);
+            break;
         case 'x':
             buf = sitoa(buf, va_arg(va, unsigned int), width, flags);
             break;

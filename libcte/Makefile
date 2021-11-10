@@ -11,7 +11,7 @@ $(PRODUCT): $(OBJECTS)
 
 .SECONDEXPANSION:
 %.o: %.c $$*.h cte-impl.h
-	$(CC) $(CCFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f $(PRODUCT) $(OBJECTS)
