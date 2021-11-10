@@ -22,6 +22,7 @@ enum flag_itoa {
     BASE_10 = 16,
 };
 
+CTE_ESSENTIAL
 static char * sitoa(char * buf, unsigned int num, int width, enum flag_itoa flags)
 {
     unsigned int base;
@@ -149,7 +150,7 @@ int cte_fdprintf(int fd, const char * fmt, ...) {
     va_list va;
     va_start(va, fmt);
     char b[512];
-    int len = cte_vsprintf(b, fmt, va);
+    size_t len = cte_vsprintf(b, fmt, va);
     assert(len < sizeof(b));
     return syscall(SYS_write, fd, b, len);
 }

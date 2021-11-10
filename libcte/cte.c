@@ -14,17 +14,33 @@
 #include <gelf.h>
 #include "cte.h"
 #include "cte-impl.h"
+#include "printf.h"
 
 static cte_vector texts;     // vector of cte_text
 static cte_vector plts;      // vector of cte_plt
 static cte_vector functions; // vector of cte_function
 
-static void *cte_vector_push(cte_vector *vector, size_t element_size) {
-    size_t bsize = vector->length * element_size;
+static void cte_vector_init(cte_vector *vector, size_t element_size) {
+    vector->length = 0;
+    vector->element_size = element_size;
+    vector->front = NULL;
+}
+
+static void *cte_vector_push(cte_vector *vector) {
+    size_t bsize = vector->length * vector->element_size;
     vector->length++;
-    vector->front = realloc(vector->front, bsize + element_size);
+    vector->front = realloc(vector->front, bsize + vector->element_size);
     return vector->front + bsize;
 }
+
+CTE_ESSENTIAL
+static void *cte_vector_get(cte_vector *vector, uint32_t idx) {
+    if (vector->length <= idx) {
+        return 0;
+    }
+    return vector->front + vector->element_size * idx;
+}
+
 
 static int cte_sort_compare_info_fn(const void *e1, const void *e2) {
     cte_info_fn *a = (cte_info_fn*)e1;
@@ -168,7 +184,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     // Get section header string table index
     size_t shstrndx;
     if (elf_getshdrstrndx(elf, &shstrndx) != 0)
-        return 7;
+        return CTE_ERROR_ELF;
 
     Elf_Scn *section;
 
@@ -219,7 +235,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                    essential_sec_vaddr, essential_sec_size);
         }
         if (strcmp(name, ".plt") == 0) {
-            cte_plt *plt = cte_vector_push(&plts, sizeof(cte_plt));
+            cte_plt *plt = cte_vector_push(&plts);
             *plt = (cte_plt) {
                 .vaddr = cte_get_vaddr(info, shdr.sh_addr),
                 .size = shdr.sh_size,
@@ -227,7 +243,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         }
     }
 
-    cte_text *text = cte_vector_push(&texts, sizeof(cte_text));
+    cte_text *text = cte_vector_push(&texts);
     *text = (cte_text) {
         .info_fns = info_fns,
         .info_fns_count = info_fns_count,
@@ -279,6 +295,8 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                 if (strcmp(f.name, "_start") == 0 ||
                     strcmp(f.name, "__libc_start_main") == 0 ||
                     strcmp(f.name, "main") == 0 ||
+                    strcmp(f.name, "syscall") == 0 ||
+
 
                     // mprotect
                     strcmp(f.name, "mprotect") == 0 ||
@@ -317,7 +335,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                 if (old) {
                     old->essential |= f.essential;
                 } else {
-                    cte_function *fs = cte_vector_push(&functions, sizeof(f));
+                    cte_function *fs = cte_vector_push(&functions);
                     *fs = f;
 
                     // Sort functions
@@ -362,23 +380,30 @@ static void *cte_decode_plt(void *entry) {
     return (void*)(*got_entry);
 }
 
-__attribute__((section(".cte_essential"), used))
+CTE_ESSENTIAL_USED
 static int cte_restore(void *addr, void *call_addr) {
-    cte_function *f;
-    cte_function *cf;
+    cte_implant *implant = addr;
+    if (!cte_implant_valid(implant))
+        cte_die("cte_restore called from invalid implant\n");
 
-    // Find the function
-    f = bsearch(addr, functions.front, functions.length,
-                sizeof(cte_function), cte_find_compare_function);
-    if (!f)
-        asm("int3\n");
+    // Find the called function
+    cte_function *f = cte_vector_get(&functions, implant->func_idx);
+    if(!f)
+        cte_die("Could not find function with id %d\n", implant->func_idx);
+
+    /*
+    cte_function *f2 = bsearch(implant, functions.front, functions.length,
+                               sizeof(cte_function), cte_find_compare_function);
+    if (f != f2)
+        cte_die("Bsearch yielded a different result...\n");
+    */
 
     // The function can be inserted if its address is taken
     if (f->info_fn && (f->info_fn->flags | FLAG_ADDRESS_TAKEN))
         goto allowed;
 
     // Find the caller
-    cf = bsearch(call_addr, functions.front, functions.length,
+    cte_function * cf = bsearch(call_addr, functions.front, functions.length,
                  sizeof(cte_function), cte_find_compare_in_function);
     if (cf && cf->info_fn) {
         // A caller function was found, and it has a info_fn
@@ -459,23 +484,31 @@ static void cte_restore_entry(void) {
         "ret\n");
 }
 
+
 CTE_ESSENTIAL
-static void cte_wipe_fn(void *start, size_t size) {
-    if (size < 12)
+static void cte_wipe_fn(cte_function *fn) {
+    cte_implant *implant = fn->vaddr;
+
+    if (fn->size < sizeof(cte_implant)) {
+        cte_debug("function %s not large enough for implant (%d < %d)\n",
+                  fn->name, fn->size, sizeof(cte_implant));
         return;
+    }
 
-    // FIXME: rax not preserved
-    uint8_t *fn = start;
-    fn[0] = 0x48; // 64bit prefix
-    fn[1] = 0xb8; // absmov to %rax
-    *((uint64_t*)&fn[2]) = (uint64_t)cte_restore_entry;
-    fn[10] = 0xff; // call *%rax
-    fn[11] = 0xd0; // ...
+    // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
+    cte_implant_init(implant, (fn - (cte_function *)functions.front));
 
-    memset(fn + 12, 0xcc, size - 12);
+    // Wipe the rest of the function body
+    memset(fn->vaddr + sizeof(cte_implant),
+           0xcc, // int3 int3 int3...
+           fn->size  - sizeof(cte_implant));
 }
 
 int cte_init(void) {
+    cte_vector_init(&functions,  sizeof(cte_function));
+    cte_vector_init(&texts,      sizeof(cte_text));
+    cte_vector_init(&plts,       sizeof(cte_plt));
+
     extern char *__progname;
     int rc = dl_iterate_phdr(cte_callback, __progname);
     if (rc < 0)
@@ -493,7 +526,7 @@ int cte_wipe(void) {
 
     for (cte_function *f = fs; f < fs + functions.length; f++) {
         if (!f->essential)
-            cte_wipe_fn(f->vaddr, f->size);
+            cte_wipe_fn(f);
     }
 
     for (cte_text *t = text; t <= text + texts.length; t++)

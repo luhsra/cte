@@ -9,6 +9,7 @@ PRODUCT = libcte.a
 $(PRODUCT): $(OBJECTS)
 	ar rcs $@ $^
 
+.SECONDEXPANSION:
 %.o: %.c $$*.h cte-impl.h
 	$(CC) $(CCFLAGS) -c -o $@ $<
 
