@@ -1,3 +1,6 @@
+CONFIG_PRINT := 0
+export CONFIG_PRINT
+
 CC := gcc
 
 PLUGIN_DIR=../gcc-plugin
