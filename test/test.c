@@ -65,11 +65,13 @@ int main(void) {
 
     cte_wipe();
 
-    cte_dump_state(fd);
 
     fnptr = testfnptr;
     test1();
     other1();
+
+    cte_dump_state(fd);
+
     return 0;
 }
 

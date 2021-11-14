@@ -57,11 +57,18 @@ typedef struct __attribute__((packed)) cte_implant {
     uint32_t func_idx;
 } cte_implant;
 
+#if CONFIG_STAT
+typedef struct cte_stat {
+    uint64_t  restore_count;
+    uint32_t *restore_times;
+} cte_stat_t;
+
+#define timespec_diff_ns(ts0, ts)   (((ts).tv_sec - (ts0).tv_sec)*1000*1000*1000 + ((ts).tv_nsec - (ts0).tv_nsec))
+
+#endif
 
 static const int FLAG_ADDRESS_TAKEN = (1 << 1);
 static const int FLAG_DEFINITION = (1 << 0);
-
-static void cte_restore_entry(void);
 
 #define cte_implant_init(ptr, _func_idx) do {                            \
     ptr->mov[0] = 0x48; /* 64bit prefix */                              \

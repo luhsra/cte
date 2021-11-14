@@ -8,9 +8,12 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ucontext.h>
+#include <syscall.h>
+
 #include <fcntl.h>
 #include <link.h>
 #include <elf.h>
+#include <time.h>
 #include <gelf.h>
 #include "cte.h"
 #include "cte-impl.h"
@@ -19,6 +22,20 @@
 static cte_vector texts;     // vector of cte_text
 static cte_vector plts;      // vector of cte_plt
 static cte_vector functions; // vector of cte_function
+
+#define func_id(func_ptr) ((func_ptr) - (cte_function *) functions.front)
+
+#if CONFIG_STAT
+static cte_stat_t cte_stat;
+
+static void cte_stat_init() {
+    cte_stat.restore_count = 0;
+    cte_stat.restore_times = calloc(functions.length, sizeof(*cte_stat.restore_times));
+}
+#endif
+
+
+static void cte_restore_entry(void);
 
 struct build_id_note {
     ElfW(Nhdr) nhdr;
@@ -492,6 +509,13 @@ static void *cte_decode_plt(void *entry) {
 
 CTE_ESSENTIAL_USED
 static int cte_restore(void *addr, void *call_addr) {
+#if CONFIG_STAT
+    cte_stat.restore_count++;
+    
+    struct timespec ts0;
+    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+#endif
+
     cte_implant *implant = addr;
     if (!cte_implant_valid(implant))
         cte_die("cte_restore called from invalid implant\n");
@@ -547,6 +571,15 @@ static int cte_restore(void *addr, void *call_addr) {
     cte_modify_begin(addr, f->size);
     memcpy(addr, f->body, f->size);
     cte_modify_end(addr, f->size);
+
+#if CONFIG_STAT
+    struct timespec ts;
+    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts) == -1) cte_die("clock_gettime");
+
+    cte_stat.restore_times[func_id(f)] = timespec_diff_ns(ts0, ts);
+     // cte_printf("%d ns\n", timespec_diff_ns(ts0, ts));
+#endif
+    
     return 0;
 }
 
@@ -608,7 +641,7 @@ static void cte_wipe_fn(cte_function *fn) {
     }
 
     // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
-    cte_implant_init(implant, (fn - (cte_function *)functions.front));
+    cte_implant_init(implant, func_id(fn));
 
     // Wipe the rest of the function body
     memset(fn->vaddr + sizeof(cte_implant),
@@ -670,6 +703,11 @@ int cte_init(void) {
         func->size += I;
     }
 
+
+#if CONFIG_STAT
+    cte_stat_init();
+#endif
+
     return 0;
 }
 
@@ -715,10 +753,17 @@ void cte_dump_state(int fd) {
         }
         cte_text *text = cte_vector_get(&texts, func->text_idx);
 
-        cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s],\n",
+        cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, %d],\n",
                      func->text_idx, func->name, func->size,
                      func->vaddr - text->vaddr + text->offset,
-                     loaded ? "True": "False");
+                     loaded ? "True": "False",
+                     func->essential ? "True": "False",
+#ifdef CONFIG_STAT
+                     cte_stat.restore_times[func_id(func)]
+#else
+                     -1
+#endif
+            );
     }
     cte_fdprintf(fd, "  ],\n");
 
