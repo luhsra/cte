@@ -758,7 +758,7 @@ void cte_dump_state(int fd) {
                      func->vaddr - text->vaddr + text->offset,
                      loaded ? "True": "False",
                      func->essential ? "True": "False",
-#ifdef CONFIG_STAT
+#if CONFIG_STAT
                      cte_stat.restore_times[func_id(func)]
 #else
                      -1
