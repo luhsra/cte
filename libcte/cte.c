@@ -84,6 +84,19 @@ static int cte_sort_compare_info_fn(const void *e1, const void *e2) {
     return 0;
 }
 
+static int cte_sort_compare_function(const void *e1, const void *e2) {
+    cte_function *a = (cte_function*)e1;
+    cte_function *b = (cte_function*)e2;
+
+    // Zeroed out cte_functions go to the end of the list
+    if (a->vaddr == NULL) return 1;
+    if (b->vaddr == NULL) return -1;
+
+    if (a->vaddr > b->vaddr) return  1;
+    if (a->vaddr < b->vaddr) return -1;
+    return 0;
+}
+
 static int cte_find_compare_info_fn(const void *addr, const void *element) {
     cte_info_fn *el = (cte_info_fn*)element;
     if (addr == el->vaddr)
@@ -143,15 +156,6 @@ static int cte_fns_init(cte_info_fn *info_fns, size_t *info_fns_count) {
 
 static void *cte_get_vaddr(struct dl_phdr_info *info, uintptr_t addr) {
     return (void*)((uintptr_t)info->dlpi_addr + addr);
-}
-
-static int cte_sort_compare_function(const void *e1, const void *e2) {
-    cte_function *a = (cte_function*)e1;
-    cte_function *b = (cte_function*)e2;
-
-    if (a->vaddr > b->vaddr) return  1;
-    if (a->vaddr < b->vaddr) return -1;
-    return 0;
 }
 
 CTE_ESSENTIAL
@@ -410,9 +414,11 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
           cte_sort_compare_function);
 
     // Step 2: Mark essential functions, Identify Duplicates, copy body
+    size_t count = functions.length;
     cte_function *function = NULL, *it;
     for_each_cte_vector(&functions, it) {
-        if (it->text_idx != (text - (cte_text *)texts.front)) continue; // From previous library
+        if (it->text_idx != (text - (cte_text *)texts.front))
+            continue; // From previous library
 
         if ((uint8_t*)it->vaddr + it->size > (uint8_t*)text->vaddr + text->size)
             cte_die("function exceeds text segment: %s\n", it->name);
@@ -420,8 +426,12 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         // Identify Duplicates
         if (!function || function->vaddr != it->vaddr) {
             function = it;
+            count++;
         } else {
-            // cte_debug("duplicate: %s %s\n", function->name, it->name);
+            // Zero out duplicate
+            *it = (const cte_function) {};
+            //cte_debug("duplicate: %s %s\n", function->name, it->name);
+            continue;
         }
 
         // Function is an essential sections?
@@ -456,22 +466,25 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             //cte_debug("essential: %s %d\n", it->name, function->essential);
         }
 
-        if (function == it) {
-            // Copy the body
-            function->body = malloc(function->size);
-            if(!function->body) cte_die("malloc failed");
-            memcpy(function->body, function->vaddr, function->size);
+        // Copy the body
+        function->body = malloc(function->size);
+        if(!function->body) cte_die("malloc failed");
+        memcpy(function->body, function->vaddr, function->size);
 
-            if (text->info_fns) {
-                function->info_fn = bsearch(function->vaddr, text->info_fns,
-                                            text->info_fns_count,
-                                            sizeof(cte_info_fn),
-                                            cte_find_compare_info_fn);
-            }
-        } else {
-            // FIXME: Eliminate duplicates
+        if (text->info_fns) {
+            function->info_fn = bsearch(function->vaddr, text->info_fns,
+                                        text->info_fns_count,
+                                        sizeof(cte_info_fn),
+                                        cte_find_compare_info_fn);
         }
     }
+
+    // Step 3: Sort by vaddr again and eliminate zeroed-out duplicates (truncate)
+    qsort(functions.front, functions.length,
+          sizeof(cte_function),
+          cte_sort_compare_function);
+    functions.front = realloc(functions.front, count * functions.element_size);
+    functions.length = count;
 
     elf_end (elf);
     return 0;
