@@ -729,7 +729,7 @@ int cte_wipe(void) {
     cte_text *text = texts.front;
     cte_function *fs = functions.front;
 
-    for (cte_text *t = text; t <= text + texts.length; t++)
+    for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_begin(t->vaddr, t->size);
 
     for (cte_function *f = fs; f < fs + functions.length; f++) {
@@ -737,7 +737,7 @@ int cte_wipe(void) {
             cte_wipe_fn(f);
     }
 
-    for (cte_text *t = text; t <= text + texts.length; t++)
+    for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_end(t->vaddr, t->size);
     return 0;
 }
