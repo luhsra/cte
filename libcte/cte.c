@@ -448,7 +448,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             // memcpy
             {0, "memcpy@GLIBC_2.2.5"}, {0, "__memcpy_avx_unaligned_erms"},
             // memset
-            {1, "__memcmp"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
+            {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
             // restore
             {0, "bsearch"},
         };
