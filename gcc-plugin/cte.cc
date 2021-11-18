@@ -63,6 +63,12 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     if (!node->get_fun())
         return NULL_TREE;
 
+    std::string fname = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node->decl));
+
+    // FIXME: The name contains "*" somehow. This was discovered compiling glibc
+    if (fname.find("*") != std::string::npos)
+        return NULL_TREE;
+
     tree ptrtype = build_pointer_type(void_type_node);
 
     vec<constructor_elt, va_gc> *obj = NULL;
@@ -86,8 +92,7 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
     info_fields = DECL_CHAIN(info_fields);
 
     // callees
-    auto array_name = std::string(".cte_callees_") +
-        IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node->decl));
+    auto array_name = std::string(".cte_callees_") + fname;
     vec<constructor_elt, va_gc> *array_ctor = NULL;
     if (!callees.empty()) {
         for (auto &callee : callees) {
