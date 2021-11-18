@@ -188,7 +188,8 @@ static void collect_info(void*, void*) {
 
         std::set<tree> callees;
         for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
-            if (!is_inlined_node(edge->callee))
+            if (!is_inlined_node(edge->callee) &&
+                !DECL_IS_UNDECLARED_BUILTIN(edge->callee->decl)) // FIXME does this exclude too much?
                 callees.insert(edge->callee->decl);
         }
         tree fn = build_info_fn(info_fn_type, node, callees);
