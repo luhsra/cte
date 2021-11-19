@@ -5,8 +5,9 @@
 
 #define CTE_ESSENTIAL       __attribute__((section(".cte_essential"), used))
 #define CTE_ESSENTIAL_NAKED __attribute__((section(".cte_essential"), used, naked))
-#define CTE_ESSENTIAL_USED __attribute__((section(".cte_essential"), used))
+#define CTE_ESSENTIAL_USED  __attribute__((section(".cte_essential"), used))
 
+#define CTE_SEALED          __attribute__((section(".cte_sealed")))
 
 struct cte_info_fn {
     void *vaddr;
@@ -47,6 +48,7 @@ struct cte_vector {
     void *front;
     size_t length;
     size_t element_size;
+    size_t capacity;
 };
 typedef struct cte_vector cte_vector;
 

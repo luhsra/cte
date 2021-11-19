@@ -19,9 +19,15 @@
 #include "cte-impl.h"
 #include "printf.h"
 
-static cte_vector texts;     // vector of cte_text
-static cte_vector plts;      // vector of cte_plt
-static cte_vector functions; // vector of cte_function
+CTE_SEALED static cte_vector texts;     // vector of cte_text
+CTE_SEALED static cte_vector plts;      // vector of cte_plt
+CTE_SEALED static cte_vector functions; // vector of cte_function
+
+CTE_SEALED static void *bodies;         // stores function bodies
+CTE_SEALED static size_t bodies_size;
+
+static void *cte_sealed_sec_vaddr = NULL;
+static size_t cte_sealed_sec_size = 0;
 
 #define func_id(func_ptr) ((func_ptr) - (cte_function *) functions.front)
 
@@ -44,17 +50,39 @@ struct build_id_note {
     uint8_t build_id[0];
 };
 
+static void cte_mmap_inc(void **addr, size_t *size) {
+    static size_t page_size = 0;
+    if (page_size == 0) {
+        page_size = sysconf(_SC_PAGESIZE);
+    }
+    size_t new_size = *size + page_size;
+    if (!*addr) {
+        *addr = mmap(NULL, new_size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    } else {
+        *addr = mremap(*addr, *size, new_size, MREMAP_MAYMOVE);
+    }
+    if (*addr == MAP_FAILED) {
+        cte_die("mmap failed");
+    }
+    *size = new_size;
+}
+
 static void cte_vector_init(cte_vector *vector, size_t element_size) {
     vector->length = 0;
     vector->element_size = element_size;
     vector->front = NULL;
+    vector->capacity = 0;
 }
 
 static void *cte_vector_push(cte_vector *vector) {
-    size_t bsize = vector->length * vector->element_size;
+    size_t old_size = vector->length * vector->element_size;
+    size_t new_size = old_size + vector->element_size;
+    while (new_size > vector->capacity) {
+        cte_mmap_inc(&vector->front, &vector->capacity);
+    }
     vector->length++;
-    vector->front = realloc(vector->front, bsize + vector->element_size);
-    return vector->front + bsize;
+    return vector->front + old_size;
 }
 
 CTE_ESSENTIAL
@@ -377,6 +405,10 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             printf("essential section: [%s] %s (%p, %lu)\n", filename, name,
                    essential_sec_vaddr, essential_sec_size);
         }
+        if (strcmp(name, ".cte_essential") == 0) {
+            cte_sealed_sec_vaddr = cte_get_vaddr(info, shdr.sh_addr);
+            cte_sealed_sec_size = shdr.sh_size;
+        }
         if (strcmp(name, ".plt") == 0) {
             cte_plt *plt = cte_vector_push(&plts);
             *plt = (cte_plt) {
@@ -413,12 +445,14 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
           sizeof(cte_function),
           cte_sort_compare_function);
 
-    // Step 2: Mark essential functions, Identify Duplicates, copy body
-    size_t count = functions.length;
+    // Step 2: Mark essential functions, identify duplicates
+    size_t count = 0;
     cte_function *function = NULL, *it;
     for_each_cte_vector(&functions, it) {
-        if (it->text_idx != (text - (cte_text *)texts.front))
+        if (it->text_idx != (text - (cte_text *)texts.front)) {
+            count++;
             continue; // From previous library
+        }
 
         if ((uint8_t*)it->vaddr + it->size > (uint8_t*)text->vaddr + text->size)
             cte_die("function exceeds text segment: %s\n", it->name);
@@ -429,7 +463,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             count++;
         } else {
             // Zero out duplicate
-            *it = (const cte_function) {};
+            it->vaddr = NULL;
             //cte_debug("duplicate: %s %s\n", function->name, it->name);
             continue;
         }
@@ -466,11 +500,6 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             //cte_debug("essential: %s %d\n", it->name, function->essential);
         }
 
-        // Copy the body
-        function->body = malloc(function->size);
-        if(!function->body) cte_die("malloc failed");
-        memcpy(function->body, function->vaddr, function->size);
-
         if (text->info_fns) {
             function->info_fn = bsearch(function->vaddr, text->info_fns,
                                         text->info_fns_count,
@@ -483,8 +512,9 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     qsort(functions.front, functions.length,
           sizeof(cte_function),
           cte_sort_compare_function);
-    functions.front = realloc(functions.front, count * functions.element_size);
     functions.length = count;
+
+    // The function bodies are saved after all elfs have been read
 
     elf_end (elf);
     return 0;
@@ -672,6 +702,23 @@ int cte_init(void) {
     if (rc < 0)
         return rc;
 
+    // Save the function bodies
+    cte_function *it;
+    for_each_cte_vector(&functions, it) {
+        bodies_size += it->size;
+    }
+    bodies = mmap(NULL, bodies_size, PROT_READ | PROT_WRITE,
+                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if(!bodies) {
+        cte_die("mmap failed");
+    }
+    void *ptr = bodies;
+    for_each_cte_vector(&functions, it) {
+        it->body = ptr;
+        memcpy(it->body, it->vaddr, it->size);
+        ptr += it->size;
+    }
+
     // Enlarge the functions sizes, if they are followed by NOPs
     const struct {uint8_t len; uint8_t opcode[15]; } nop_codes[] = {
         {1,  {0x00}},
@@ -720,6 +767,19 @@ int cte_init(void) {
 #if CONFIG_STAT
     cte_stat_init();
 #endif
+
+    // Seal everything
+    // TODO: problem: cte_sealed not in own segment
+    /* if (mprotect(cte_sealed_sec_vaddr, cte_sealed_sec_size, PROT_READ) == -1) */
+    /*     cte_die("sealing failed"); */
+    if (mprotect(texts.front, texts.capacity, PROT_READ) == -1)
+        cte_die("sealing failed");
+    if (mprotect(plts.front, plts.capacity, PROT_READ) == -1)
+        cte_die("sealing failed");
+    if (mprotect(functions.front, functions.capacity, PROT_READ) == -1)
+        cte_die("sealing failed");
+    if (mprotect(bodies, bodies_size, PROT_READ) == -1)
+        cte_die("sealing failed");
 
     return 0;
 }
