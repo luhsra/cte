@@ -653,7 +653,30 @@ static void cte_restore_entry(void) {
         // The stack must be 16-byte aligned before the call
         "leaq -8(%rsp), %rsp\n"
 
+        // Save the %xmm0-%xmm7 -- they are used for fp arguments
+        /* "subq $128, %rsp\n" */
+        "leaq -128(%rsp), %rsp\n"
+        "movdqu %xmm0, 112(%rsp)\n"
+        "movdqu %xmm1, 96(%rsp)\n"
+        "movdqu %xmm2, 80(%rsp)\n"
+        "movdqu %xmm3, 64(%rsp)\n"
+        "movdqu %xmm4, 48(%rsp)\n"
+        "movdqu %xmm5, 32(%rsp)\n"
+        "movdqu %xmm6, 16(%rsp)\n"
+        "movdqu %xmm7, (%rsp)\n"
+
         "call cte_restore\n"
+
+        // Restore %xmm0-%xmm7
+        "movdqu 112(%rsp), %xmm0\n"
+        "movdqu 96(%rsp), %xmm1\n"
+        "movdqu 80(%rsp), %xmm2\n"
+        "movdqu 64(%rsp), %xmm3\n"
+        "movdqu 48(%rsp), %xmm4\n"
+        "movdqu 32(%rsp), %xmm5\n"
+        "movdqu 16(%rsp), %xmm6\n"
+        "movdqu (%rsp), %xmm7\n"
+        "leaq 128(%rsp), %rsp\n"
 
         "leaq 8(%rsp), %rsp\n"
 
@@ -667,6 +690,7 @@ static void cte_restore_entry(void) {
         "popq %rax\n"
         "popq %rsi\n"
         "popq %rdi\n"
+
         "ret\n");
 }
 
