@@ -58,7 +58,8 @@ static tree build_info_fn_type()
     return info_fn_type;
 }
 
-static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) {
+static tree build_info_fn(tree type, cgraph_node *node,
+                          std::set<std::string> callees) {
     // FIXME: Sometimes this is NULL, ignore these functions for now
     if (!node->get_fun())
         return NULL_TREE;
@@ -98,9 +99,8 @@ static tree build_info_fn(tree type, cgraph_node *node, std::set<tree> callees) 
         for (auto &callee : callees) {
             // Make a fake decl to trick the compiler into not setting
             // address_taken in the callee
-            const char *name = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(callee));
             tree lab = build_decl(BUILTINS_LOCATION, VAR_DECL, NULL_TREE, ptrtype);
-            SET_DECL_ASSEMBLER_NAME(lab, get_identifier(name));
+            SET_DECL_ASSEMBLER_NAME(lab, get_identifier(callee.c_str()));
             TREE_STATIC(lab) = 1;
             CONSTRUCTOR_APPEND_ELT(array_ctor, NULL, build1(ADDR_EXPR, ptrtype, lab));
         }
@@ -186,11 +186,26 @@ static void collect_info(void*, void*) {
         if (is_inlined_node(node) || is_builtin_node(node))
             continue;
 
-        std::set<tree> callees;
+        std::set<std::string> callees;
         for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
-            if (!is_inlined_node(edge->callee) &&
-                !DECL_IS_UNDECLARED_BUILTIN(edge->callee->decl)) // FIXME does this exclude too much?
-                callees.insert(edge->callee->decl);
+            std::string cfname = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(edge->callee->decl));
+
+            if (is_inlined_node(edge->callee))
+                continue;
+
+            // Ignore builtin functions
+            if (DECL_IS_UNDECLARED_BUILTIN(edge->callee->decl)) {
+                // HACK: Most builtin functions get inlined.
+                // However, the following functions call the respective libc
+                // functions and must not be excluded.
+                if (cfname != "puts" &&
+                    cfname != "fputs" &&
+                    cfname != "printf" &&
+                    cfname != "fprintf")
+                    continue;
+            }
+
+            callees.insert(cfname);
         }
         tree fn = build_info_fn(info_fn_type, node, callees);
         if (fn != NULL_TREE)
