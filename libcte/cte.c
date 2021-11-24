@@ -476,7 +476,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
 
         // Does this function have an essential name?
         struct { char begin; char *pattern; } names[] = {
-            {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"},
+            {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"}, {0, "exit"},
             // mprotect
             {0, "mprotect"}, {0, "pkey_mprotect"}, {0, "__mprotect"},
             // memcpy
