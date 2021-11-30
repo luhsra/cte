@@ -562,6 +562,51 @@ static void *cte_decode_plt(void *entry) {
     return (void*)(*got_entry);
 }
 
+#ifdef CONFIG_PRINT
+CTE_ESSENTIAL_USED
+static void cte_debug_restore(void *addr, void *post_call_addr,
+                              cte_function *function,
+                              cte_function *caller) {
+    cte_text *function_text = cte_vector_get(&texts, function->text_idx);
+    cte_text *caller_text = cte_vector_get(&texts, caller->text_idx);
+
+    cte_printf("---------\n");
+    cte_printf("Function %s (%p [%s]) called before %s+%p (%p [%s])\n",
+               function->name, addr, function_text->filename,
+               caller->name, post_call_addr - caller->vaddr,
+               post_call_addr, caller_text->filename);
+
+    cte_printf("Allowed callees (%d)\n", caller->info_fn->calles_count);
+    for (int i = 0; i < caller->info_fn->calles_count; i++) {
+        void *callee = caller->info_fn->callees[i];
+        cte_function *cd = bsearch(callee, functions.front, functions.length,
+                                   sizeof(cte_function),
+                                   cte_find_compare_function);
+        if (cd) {
+            cte_printf("  %p: %s\n", callee, cd->name);
+        } else {
+            cte_plt *p, *plt = NULL;
+            for_each_cte_vector(&plts, p) {
+                if (callee >= p->vaddr && callee < (p->vaddr + p->size)) {
+                    plt = p;
+                    break;
+                }
+            }
+            if (plt) {
+                cte_text *text = cte_vector_get(&texts, plt->text_idx);
+                cte_printf("  %p: .plt+%p [%s]\n", callee, callee - plt->vaddr,
+                           text->filename);
+            } else {
+                cte_printf("  %p: ??\n", callee);
+            }
+        }
+    }
+    cte_printf("---------\n");
+}
+#else
+#define cte_debug_restore(addr, post_call_addr, function, caller)
+#endif
+
 CTE_ESSENTIAL_USED
 static int cte_restore(void *addr, void *post_call_addr) {
 #if CONFIG_STAT
@@ -621,36 +666,7 @@ static int cte_restore(void *addr, void *post_call_addr) {
         }
 
         // Failed to find the callee
-#ifdef CONFIG_PRINT
-        cte_printf("---------\n");
-        cte_printf("Function %s (%p) called before %s+%p (%p)\n",
-                   f->name, addr, cf->name, post_call_addr - cf->vaddr, post_call_addr);
-        cte_printf("Allowed callees (%d)\n", cf->info_fn->calles_count);
-        for (int i = 0; i < cf->info_fn->calles_count; i++) {
-            void *callee = cf->info_fn->callees[i];
-            cte_function *cd = bsearch(callee, functions.front, functions.length,
-                                       sizeof(cte_function), cte_find_compare_function);
-            if (cd) {
-                cte_printf("  %p: %s\n", callee, cd->name);
-            } else {
-                cte_plt *p, *plt = NULL;
-                for_each_cte_vector(&plts, p) {
-                    if (callee >= p->vaddr && callee < (p->vaddr + p->size)) {
-                        plt = p;
-                        break;
-                    }
-                }
-                if (p) {
-                    cte_text *text = cte_vector_get(&texts, plt->text_idx);
-                    cte_printf("  %p: plt@%s+%p\n", callee, text->filename,
-                               callee - plt->vaddr);
-                } else {
-                    cte_printf("  %p: ??\n", callee);
-                }
-            }
-        }
-        cte_printf("---------\n");
-#endif
+        cte_debug_restore(addr, post_call_addr, f, cf);
         cte_die("Unrecognized callee\n");
     }
 
