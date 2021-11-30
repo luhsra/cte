@@ -1,5 +1,7 @@
+.SUFFIXES:
+
 CONFIG_PRINT ?= 1
-CONFIG_STAT ?= 1
+CONFIG_STAT  ?= 1
 
 SOURCES = cte.c
 ifeq ($(CONFIG_PRINT), 1)
@@ -7,13 +9,18 @@ SOURCES += cte-printf.c
 endif
 
 CC := gcc
-CFLAGS += -Wall -Wextra -O2 -ggdb -DCONFIG_PRINT=$(CONFIG_PRINT) -DCONFIG_STAT=$(CONFIG_STAT)
+CFLAGS += -Wall -Wextra -O2 -ggdb -DCONFIG_PRINT=$(CONFIG_PRINT) -DCONFIG_STAT=$(CONFIG_STAT) -fPIC
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
-PRODUCT = libcte.a
+PRODUCTS = libcte.a libcte.so
 
 .PHONY: clean
 
-$(PRODUCT): $(OBJECTS)
+all: ${PRODUCTS}
+
+libcte.so: ${OBJECTS}
+	${CC} -shared ${OBJECTS} -o $@
+
+libcte.a: $(OBJECTS)
 	ar rcs $@ $^
 
 .SECONDEXPANSION:
@@ -21,4 +28,6 @@ $(PRODUCT): $(OBJECTS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(PRODUCT) $(OBJECTS)
+	rm -f ${PRODUCTS} $(OBJECTS)
+
+%.so: %.o
