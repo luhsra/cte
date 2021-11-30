@@ -171,6 +171,38 @@ static bool is_builtin_node(cgraph_node *node) {
     return DECL_BUILT_IN_CLASS(node->decl) != NOT_BUILT_IN;
 }
 
+static void collect_info_rec(std::set<std::string> *callees, cgraph_node *node) {
+    for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
+        std::string cfname = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(edge->callee->decl));
+
+        // Recursively add the inlined function's callees
+        // but ignore the inlined function istelf.
+        if (is_inlined_node(edge->callee)) {
+            collect_info_rec(callees, edge->callee);
+            continue;
+        }
+
+        // Ignore builtin functions
+        if (DECL_IS_UNDECLARED_BUILTIN(edge->callee->decl)) {
+            // HACK: Most builtin functions get inlined.
+            // However, the following functions call the respective libc
+            // functions and must not be excluded.
+            if (cfname != "puts" &&
+                cfname != "fputs" &&
+                cfname != "printf" &&
+                cfname != "fprintf")
+                continue;
+        }
+
+        // HACK: Strange libc functions
+        if (cfname == "setbuf") {
+            cfname = "setbuffer";
+        }
+
+        callees->insert(cfname);
+    }
+}
+
 static void collect_info(void*, void*) {
     tree info_fn_type = build_info_fn_type();
     std::vector<tree> fns;
@@ -187,26 +219,8 @@ static void collect_info(void*, void*) {
             continue;
 
         std::set<std::string> callees;
-        for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
-            std::string cfname = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(edge->callee->decl));
+        collect_info_rec(&callees, node);
 
-            if (is_inlined_node(edge->callee))
-                continue;
-
-            // Ignore builtin functions
-            if (DECL_IS_UNDECLARED_BUILTIN(edge->callee->decl)) {
-                // HACK: Most builtin functions get inlined.
-                // However, the following functions call the respective libc
-                // functions and must not be excluded.
-                if (cfname != "puts" &&
-                    cfname != "fputs" &&
-                    cfname != "printf" &&
-                    cfname != "fprintf")
-                    continue;
-            }
-
-            callees.insert(cfname);
-        }
         tree fn = build_info_fn(info_fn_type, node, callees);
         if (fn != NULL_TREE)
             fns.push_back(fn);
