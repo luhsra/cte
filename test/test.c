@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <dlfcn.h>
 
 
 
@@ -56,12 +57,15 @@ int rec(int i) {
 /* } */
 
 int main(void) {
+    void *libssl = dlopen("libssl.so", RTLD_NOW | RTLD_GLOBAL);
     int fd = open("test.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
     int rc = cte_init();
     if (rc < 0) {
         perror("CTE Error");
         return 2;
     }
+
+
 
     cte_wipe();
 

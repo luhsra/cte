@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/ucontext.h>
 #include <syscall.h>
+#include <link.h>
 
 #include <fcntl.h>
 #include <link.h>
@@ -881,4 +882,17 @@ void cte_dump_state(int fd) {
     cte_fdprintf(fd, "  ],\n");
 
     cte_fdprintf(fd, "}\n");
+}
+
+
+// Require LD_PRELOAD
+void *dlopen(const char *path, int flags) {
+    static void *(*original_dlopen)(const char*, int) = NULL;
+    if (!original_dlopen) {
+        original_dlopen = dlsym(RTLD_NEXT, "dlopen");
+    }
+    void *ret = (*original_dlopen)(path, flags);
+    // FIXME: Re-wipe
+    
+    return ret;
 }
