@@ -198,11 +198,14 @@ static int cte_find_compare_function(const void *addr, const void *element) {
 }
 
 CTE_ESSENTIAL
-static int cte_find_compare_in_function(const void *addr, const void *element) {
+static int cte_find_compare_in_function(const void *post_call_addr,
+                                        const void *element) {
+    // Note that pos_call_addr is the address after the call in the caller.
     cte_function *el = (cte_function*)element;
-    if (addr >= el->vaddr && (uint8_t*)addr < ((uint8_t*)el->vaddr + el->size))
+    if (post_call_addr > el->vaddr &&
+        (uint8_t*)post_call_addr <= ((uint8_t*)el->vaddr + el->size))
         return 0;
-    if (addr < el->vaddr)
+    if (post_call_addr <= el->vaddr)
         return -1;
     else
         return 1;
@@ -551,7 +554,7 @@ static void *cte_decode_plt(void *entry) {
 }
 
 CTE_ESSENTIAL_USED
-static int cte_restore(void *addr, void *call_addr) {
+static int cte_restore(void *addr, void *post_call_addr) {
 #if CONFIG_STAT
     cte_stat.restore_count++;
     
@@ -580,7 +583,7 @@ static int cte_restore(void *addr, void *call_addr) {
         goto allowed;
 
     // Find the caller
-    cte_function * cf = bsearch(call_addr, functions.front, functions.length,
+    cte_function * cf = bsearch(post_call_addr, functions.front, functions.length,
                  sizeof(cte_function), cte_find_compare_in_function);
     if (cf && cf->info_fn) {
         // A caller function was found, and it has a info_fn
@@ -611,8 +614,8 @@ static int cte_restore(void *addr, void *call_addr) {
         // Failed to find the callee
 #ifdef CONFIG_PRINT
         cte_printf("---------\n");
-        cte_printf("Function %s (%p) called at %s+%p (%p)\n",
-                   f->name, addr, cf->name, call_addr - cf->vaddr, call_addr);
+        cte_printf("Function %s (%p) called before %s+%p (%p)\n",
+                   f->name, addr, cf->name, post_call_addr - cf->vaddr, post_call_addr);
         cte_printf("Allowed callees (%d)\n", cf->info_fn->calles_count);
         for (int i = 0; i < cf->info_fn->calles_count; i++) {
             void *callee = cf->info_fn->callees[i];
@@ -649,10 +652,11 @@ static void cte_restore_entry(void) {
 
         // rdi (first argument) is the current return pointer of this function
         "movq 16(%rsp), %rdi\n"
-        // rsi (second argument) is the call address in the caller
+        // rsi (second argument) is the address of the next instruction
+        // (after the call) in the caller
         "movq 24(%rsp), %rsi\n"
 
-        // Modify the return value to return to the original function start addr
+        // Modify the return ptr: Return to the original function start addr
         "leaq -12(%rdi), %rdi\n"
         "movq %rdi, 16(%rsp)\n"
 
