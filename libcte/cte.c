@@ -17,7 +17,7 @@
 #include <gelf.h>
 #include "cte.h"
 #include "cte-impl.h"
-#include "printf.h"
+#include "cte-printf.h"
 
 CTE_SEALED static cte_vector texts;     // vector of cte_text
 CTE_SEALED static cte_vector plts;      // vector of cte_plt

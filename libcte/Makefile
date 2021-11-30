@@ -3,7 +3,7 @@ CONFIG_STAT ?= 1
 
 SOURCES = cte.c
 ifeq ($(CONFIG_PRINT), 1)
-SOURCES += printf.c
+SOURCES += cte-printf.c
 endif
 
 CC := gcc

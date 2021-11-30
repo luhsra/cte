@@ -6,7 +6,7 @@
 #include <sys/syscall.h>
 #include <assert.h>
 
-#include "printf.h"
+#include "cte-printf.h"
 
 
 #define min(a,b) __extension__\
