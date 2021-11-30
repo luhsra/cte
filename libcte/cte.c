@@ -378,11 +378,13 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         }
     }
 
-    // Collect function metadata from compiler plugin
     cte_info_fn *info_fns = NULL;
     size_t info_fns_count = 0;
     void *essential_sec_vaddr = NULL;
     size_t essential_sec_size = 0;
+    cte_plt *plt = NULL;
+
+    // Collect function metadata from compiler plugin
     section = NULL;
     while ((section = elf_nextscn(elf, section)) != NULL) {
         GElf_Shdr shdr;
@@ -414,8 +416,9 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             cte_sealed_sec_size = shdr.sh_size;
         }
         if (strcmp(name, ".plt") == 0) {
-            cte_plt *plt = cte_vector_push(&plts);
+            plt = cte_vector_push(&plts);
             *plt = (cte_plt) {
+                .text_idx = 0, // Gets set later
                 .vaddr = cte_get_vaddr(info, shdr.sh_addr),
                 .size = shdr.sh_size,
             };
@@ -423,6 +426,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     }
 
     cte_text *text = cte_vector_push(&texts);
+    uint32_t text_idx = (text - (cte_text *)texts.front);
     *text = (cte_text) {
         .filename = strdup(filename),
         .info_fns = info_fns,
@@ -431,7 +435,11 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         .offset = text_offset,
         .size = text_size,
     };
-    if(!text->filename) cte_die("strdup failed");
+    if(!text->filename)
+        cte_die("strdup failed");
+
+    if (plt)
+        plt->text_idx = text_idx;
 
     // Collect ELF symbol info
     cte_elf_scan_symbols(elf, text, info->dlpi_addr);
@@ -453,7 +461,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     size_t count = 0;
     cte_function *function = NULL, *it;
     for_each_cte_vector(&functions, it) {
-        if (it->text_idx != (text - (cte_text *)texts.front)) {
+        if (it->text_idx != text_idx) {
             count++;
             continue; // From previous library
         }
@@ -622,7 +630,24 @@ static int cte_restore(void *addr, void *post_call_addr) {
             void *callee = cf->info_fn->callees[i];
             cte_function *cd = bsearch(callee, functions.front, functions.length,
                                        sizeof(cte_function), cte_find_compare_function);
-            cte_printf("  %p: %s\n", callee, (cd) ? cd->name : "??");
+            if (cd) {
+                cte_printf("  %p: %s\n", callee, cd->name);
+            } else {
+                cte_plt *p, *plt = NULL;
+                for_each_cte_vector(&plts, p) {
+                    if (callee >= p->vaddr && callee < (p->vaddr + p->size)) {
+                        plt = p;
+                        break;
+                    }
+                }
+                if (p) {
+                    cte_text *text = cte_vector_get(&texts, plt->text_idx);
+                    cte_printf("  %p: plt@%s+%p\n", callee, text->filename,
+                               callee - plt->vaddr);
+                } else {
+                    cte_printf("  %p: ??\n", callee);
+                }
+            }
         }
         cte_printf("---------\n");
 #endif
