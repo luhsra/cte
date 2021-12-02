@@ -38,6 +38,7 @@ static size_t cte_sealed_sec_size = 0;
 static cte_stat_t cte_stat;
 
 static void cte_stat_init() {
+    cte_stat.init_time = 0;
     cte_stat.restore_count = 0;
     cte_stat.restore_times = calloc(functions.length, sizeof(*cte_stat.restore_times));
 }
@@ -688,7 +689,7 @@ static int cte_restore(void *addr, void *post_call_addr) {
     }
 
     allowed:
-    //  cte_printf("-> load: %s (caller: %s)\n", f->name, cf ? cf->name : "<unknown>");
+    // cte_printf("-> load: %s (caller: %s)\n", f->name, cf ? cf->name : "<unknown>");
     // Load the called function
     cte_modify_begin(addr, f->size);
     memcpy(addr, f->body, f->size);
@@ -808,6 +809,11 @@ static void cte_wipe_fn(cte_function *fn) {
 }
 
 int cte_init(void) {
+#if CONFIG_STAT
+    struct timespec ts0;
+    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+#endif
+
     cte_vector_init(&functions,  sizeof(cte_function));
     cte_vector_init(&texts,      sizeof(cte_text));
     cte_vector_init(&plts,       sizeof(cte_plt));
@@ -920,6 +926,13 @@ int cte_init(void) {
     if (mprotect(bodies, bodies_size, PROT_READ) == -1)
         cte_die("sealing failed");
 
+#if CONFIG_STAT
+    struct timespec ts1;
+    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts1) == -1) cte_die("clock_gettime");
+
+    cte_stat.init_time = timespec_diff_ns(ts0, ts1);
+    printf("init time: %.2f ms\n", cte_stat.init_time / (double)1e6);
+#endif
     return 0;
 }
 
@@ -937,6 +950,11 @@ int cte_mmview_unshare(void) {
 
 CTE_ESSENTIAL
 int cte_wipe(void) {
+#if CONFIG_STAT
+    struct timespec ts0;
+    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+#endif
+
     cte_text *text = texts.front;
     cte_function *fs = functions.front;
 
@@ -948,14 +966,26 @@ int cte_wipe(void) {
     for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_begin(t->vaddr, t->size);
 
+    int wipe_count = 0;
     for (cte_function *f = fs; f < fs + functions.length; f++) {
-        if (f->body && !f->essential && f != cf)
+        if (f->body && !f->essential && f != cf && cte_func_loaded(f)) {
             cte_wipe_fn(f);
+            wipe_count += 1;
+        }
     }
 
     for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_end(t->vaddr, t->size);
-    return 0;
+
+#if CONFIG_STAT
+    struct timespec ts1;
+    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts1) == -1) cte_die("clock_gettime");
+
+    cte_stat.wipe_time = timespec_diff_ns(ts0, ts1);
+    cte_printf("wipe time: %d ms\n", (uint32_t) (cte_stat.wipe_time/1e6));
+#endif
+
+    return wipe_count;
 }
 
 void cte_dump_state(int fd) {

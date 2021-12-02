@@ -64,6 +64,8 @@ typedef struct __attribute__((packed)) cte_implant {
 #if CONFIG_STAT
 typedef struct cte_stat {
     uint64_t  restore_count;
+    uint32_t  init_time;
+    uint32_t  wipe_time;
     uint32_t *restore_times;
 } cte_stat_t;
 

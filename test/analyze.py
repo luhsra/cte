@@ -28,12 +28,21 @@ def analyze(data):
     df = texts.merge(x, left_index=True, right_index=True)
     df.fillna(0, inplace=True)
 
+    df['sum_Total'] = df.sum_False + df.sum_True
+    df['len_Total'] = df.len_False + df.len_True
+
+
     df['loaded %'] = (df.bytes - df.sum_False)/df.bytes
     df['wipeable %'] = (df.sum_True + df.sum_False)/df.bytes
 
     print(df)
 
-    print("Bytes Loaded (%%):", (sum(df.bytes) - sum(df.sum_False))/ sum(df.bytes))
+    print("Total bytes loaded (%):",   (sum(df.bytes) - sum(df.sum_False))/ sum(df.bytes))
+    print("Wipeable bytes loaded (%):", (sum(df.sum_True)/sum(df.sum_Total)))
+    print("Wipeable funcs loaded (%):", (sum(df.len_True)/sum(df.len_Total)))
+    print("Restore (count/ms):", sum(df.len_True), sum(funcs.restore_time)/1e6)
+
+    
 
     funcs['bytes_per_ns']= funcs.bytes / funcs.restore_time
 

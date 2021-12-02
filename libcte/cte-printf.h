@@ -7,7 +7,14 @@ CTE_ESSENTIAL int cte_vsprintf(char * buf, const char * fmt, va_list va);
 CTE_ESSENTIAL int cte_sprintf(char * buf, const char * fmt, ...);
 CTE_ESSENTIAL int cte_fdprintf(int fd, const char * fmt, ...);
 #define cte_printf(...) cte_fdprintf(1, __VA_ARGS__)
+
+#ifdef CONFIG_DEBUG
 #define cte_debug(...) cte_fdprintf(2, "DEBUG: " __VA_ARGS__)
+#warning asdas
+#else
+#define cte_debug(...) ((void)0)
+#endif
+
 #define cte_die(...) do { cte_fdprintf(2, "ERROR: "  __VA_ARGS__); asm("int3"); } while(0)
 #else
 #define cte_vsprintf(...) 0
