@@ -35,6 +35,7 @@ struct cte_function {
     void *body;
     struct cte_info_fn *info_fn;
     bool essential;
+    uint32_t sibling_idx;
 };
 typedef struct cte_function cte_function;
 

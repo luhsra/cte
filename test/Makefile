@@ -9,7 +9,7 @@ LIBRARY_DIR=../libcte
 LIBRARY=$(LIBRARY_DIR)/libcte.so
 
 # -falign-functions is also enabled in -O2
-CFLAGS += -Wall -Wextra -fplugin=$(PLUGIN) -I$(LIBRARY_DIR) -g -ggdb -O0 -falign-functions
+CFLAGS += -Wall -Wextra -fplugin=$(PLUGIN) -I$(LIBRARY_DIR) -g -ggdb -O3 -falign-functions
 LDFLAGS += -L$(LIBRARY_DIR)
 LIBS    += -lelf -ldl
 SOURCES = $(wildcard *.c)

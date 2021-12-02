@@ -32,6 +32,7 @@ static void *cte_sealed_sec_vaddr = NULL;
 static size_t cte_sealed_sec_size = 0;
 
 #define func_id(func_ptr) ((func_ptr) - (cte_function *) functions.front)
+#define FUNC_ID_INVALID (uint32_t)(~0)
 
 #if CONFIG_STAT
 static cte_stat_t cte_stat;
@@ -213,6 +214,17 @@ static int cte_find_compare_in_function(const void *post_call_addr,
         return 1;
 }
 
+CTE_ESSENTIAL
+static inline
+bool cte_func_loaded(cte_function *func) {
+    cte_implant *implant = func->vaddr;
+    if (func->size >= sizeof(cte_implant)) {
+        if (cte_implant_valid(implant))
+            return false;
+    }
+    return true;
+}
+
 static
 Elf * cte_elf_begin(int fd) {
     if (elf_version(EV_CURRENT) == EV_NONE)
@@ -259,6 +271,7 @@ cte_elf_scan_symbols(Elf *elf, cte_text * text, ElfW(Addr) dlpi_addr) {
                     .body      = NULL,
                     .info_fn   = NULL,
                     .essential = false,
+                    .sibling_idx = FUNC_ID_INVALID,
                 };
 
                 // Push Function
@@ -287,7 +300,7 @@ void cte_handle_build_id(struct dl_phdr_info *info, cte_text *text, int j) {
             build_id = note;
             break;
         }
-        
+
 #define ALIGN(val, align)       (((val) + (align) - 1) & ~((align) - 1))
         size_t offset = sizeof(ElfW(Nhdr)) +
             ALIGN(note->nhdr.n_namesz, 4) +
@@ -337,9 +350,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     // Open the object file
     int fd = open(filename, O_RDONLY);
     if (fd < 0) {
-        // FIXME
-        // fprintf(stderr, "Could not open: %s\n", fn, strerror(errno));
-        cte_die("Could not open file: %s\n", filename);
+        cte_die("[cte_init] Could not open file: %s (%s)\n", filename, info->dlpi_name);
         return 0;
     }
 
@@ -612,7 +623,7 @@ CTE_ESSENTIAL_USED
 static int cte_restore(void *addr, void *post_call_addr) {
 #if CONFIG_STAT
     cte_stat.restore_count++;
-    
+
     struct timespec ts0;
     if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
 #endif
@@ -624,8 +635,10 @@ static int cte_restore(void *addr, void *post_call_addr) {
     // Find the called function
     cte_function *f = cte_vector_get(&functions, implant->func_idx);
     if(!f)
-        cte_die("Could not find function with id %d\n", implant->func_idx);
+        cte_die("Could not find function with id %d (max_id=%d)\n",
+                implant->func_idx, functions.length);
 
+    cte_function * cf = NULL;
     /*
     cte_function *f2 = bsearch(implant, functions.front, functions.length,
                                sizeof(cte_function), cte_find_compare_function);
@@ -638,8 +651,11 @@ static int cte_restore(void *addr, void *post_call_addr) {
         goto allowed;
 
     // Find the caller
-    cte_function * cf = bsearch(post_call_addr, functions.front, functions.length,
+    cf = bsearch(post_call_addr, functions.front, functions.length,
                  sizeof(cte_function), cte_find_compare_in_function);
+
+    goto allowed;
+
     if (cf && cf->info_fn) {
         // A caller function was found, and it has a info_fn
         // Let's see if we are allowed to call function f
@@ -672,10 +688,22 @@ static int cte_restore(void *addr, void *post_call_addr) {
     }
 
     allowed:
-    /* cte_printf("-> load: %s\n", f->name); */
+    //  cte_printf("-> load: %s (caller: %s)\n", f->name, cf ? cf->name : "<unknown>");
+    // Load the called function
     cte_modify_begin(addr, f->size);
     memcpy(addr, f->body, f->size);
     cte_modify_end(addr, f->size);
+
+    // Load the sibling
+    if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
+        cte_function *func_sibling = cte_vector_get(&functions, f->sibling_idx);
+        if (!cte_func_loaded(func_sibling)) {
+            // cte_printf("-> load sibling: %s\n", func_sibling->name);
+            cte_modify_begin(func_sibling->vaddr, func_sibling->size);
+            memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
+            cte_modify_end(func_sibling->vaddr, func_sibling->size);
+        }
+    }
 
 #if CONFIG_STAT
     struct timespec ts;
@@ -684,7 +712,7 @@ static int cte_restore(void *addr, void *post_call_addr) {
     cte_stat.restore_times[func_id(f)] = timespec_diff_ns(ts0, ts);
      // cte_printf("%d ns\n", timespec_diff_ns(ts0, ts));
 #endif
-    
+
     return 0;
 }
 
@@ -784,8 +812,9 @@ int cte_init(void) {
     cte_vector_init(&texts,      sizeof(cte_text));
     cte_vector_init(&plts,       sizeof(cte_plt));
 
-    extern char *__progname;
-    int rc = dl_iterate_phdr(cte_callback, __progname);
+    // extern char *__progname;
+    extern char * program_invocation_name;
+    int rc = dl_iterate_phdr(cte_callback, program_invocation_name);
     if (rc < 0)
         return rc;
 
@@ -826,9 +855,10 @@ int cte_init(void) {
     };
     cte_function *func;
     for_each_cte_vector(&functions, func) {
-        if (!func->body) continue; // Aliases
-        
-        // if (strcmp(func->name, "mini")) continue;
+        if (!func->body) continue; // Skip Aliases
+
+        ////////////////////////////////////////////////////////////////
+        // Nop enlargement
         uint8_t *P = func->vaddr + func->size;
         uint8_t I = 0;
         while((uintptr_t )&P[I] & (CTE_MAX_FUNC_ALIGN -1)) { // As long as we are not aligned
@@ -848,6 +878,28 @@ int cte_init(void) {
         }
         // Enlarge this function to include nops
         func->size += I;
+
+
+        ////////////////////////////////////////////////////////////////
+        // Find Sibling Functions
+        unsigned length = strlen(func->name);
+        if (length > 5 && strncmp(func->name + length - 5, ".cold", 5) == 0) {
+            // func is a cold function. We have to find its hot counterpart:
+            cte_function *func_hot = NULL, *func2;
+
+            func->name[length - 5] = '\0'; // Sorry mum.
+            for_each_cte_vector(&functions, func2) {
+                if (strcmp(func->name, func2->name) == 0)
+                    func_hot = func2;
+            }
+            func->name[length - 5] = '.';
+
+            if (!func_hot) continue;
+
+            func->sibling_idx = func_id(func_hot);
+            func_hot->sibling_idx = func_id(func);
+            // cte_printf("Hot/Cold Pair: \t%s\n\t%s\n", func->name, func_hot->name);
+        }
     }
 
 
@@ -888,11 +940,16 @@ int cte_wipe(void) {
     cte_text *text = texts.front;
     cte_function *fs = functions.front;
 
+    // Find caller function, as we do not wipe it
+    void *retaddr = __builtin_extract_return_addr (__builtin_return_address (0));
+    cte_function * cf = bsearch(retaddr, functions.front, functions.length,
+                                sizeof(cte_function), cte_find_compare_in_function);
+
     for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_begin(t->vaddr, t->size);
 
     for (cte_function *f = fs; f < fs + functions.length; f++) {
-        if (f->body && !f->essential)
+        if (f->body && !f->essential && f != cf)
             cte_wipe_fn(f);
     }
 
@@ -911,18 +968,13 @@ void cte_dump_state(int fd) {
         cte_fdprintf(fd, "    [%d, \"%s\", %d],\n", idx++, text->filename, text->size);
     }
     cte_fdprintf(fd, "  ],\n");
-    
+
     cte_function *func;
     cte_fdprintf(fd, "  \"functions\": [\n");
     for_each_cte_vector(&functions, func) {
         if (!func->body) continue;
-        
-        cte_implant *implant = func->vaddr;
-        bool loaded = true;
-        if (func->size >= sizeof(cte_implant)) {
-            if (cte_implant_valid(implant))
-                loaded = false;
-        }
+
+        bool loaded = cte_func_loaded(func);
         cte_text *text = cte_vector_get(&texts, func->text_idx);
 
         cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, %d],\n",
@@ -939,7 +991,7 @@ void cte_dump_state(int fd) {
     }
     cte_fdprintf(fd, "  ],\n");
 
-    cte_fdprintf(fd, "}\n");
+    cte_fdprintf(fd, "}\n\1");
 }
 
 
@@ -951,6 +1003,6 @@ void *dlopen(const char *path, int flags) {
     }
     void *ret = (*original_dlopen)(path, flags);
     // FIXME: Re-wipe
-    
+
     return ret;
 }
