@@ -19,6 +19,7 @@
 #include "cte.h"
 #include "cte-impl.h"
 #include "cte-printf.h"
+#include "mmview.h"
 
 CTE_SEALED static cte_vector texts;     // vector of cte_text
 CTE_SEALED static cte_vector plts;      // vector of cte_plt
@@ -869,6 +870,18 @@ int cte_init(void) {
 
     return 0;
 }
+
+int cte_mmview_unshare(void) {
+    cte_text *text;
+    for_each_cte_vector(&texts, text) {
+        int rc = mmview_unshare(text->vaddr, text->size);
+        if (rc != 0) {
+            cte_die("unshare failed");
+        }
+    }
+    return 0;
+}
+
 
 CTE_ESSENTIAL
 int cte_wipe(void) {

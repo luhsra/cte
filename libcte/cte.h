@@ -1,3 +1,6 @@
+#ifdef __cplusplus
+extern "C" {
+#endif
 // This is the public API of libcte
 
 #pragma once
@@ -11,6 +14,12 @@ enum cte_error {
 
 int cte_init(void);
 
+int cte_mmview_unshare(void);
+
 int cte_wipe(void);
 
 void cte_dump_state(int fd);
+
+#ifdef __cplusplus
+}
+#endif
