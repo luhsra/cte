@@ -18,7 +18,10 @@ int cte_mmview_unshare(void);
 
 int cte_wipe(void);
 
-void cte_dump_state(int fd);
+#define CTE_DUMP_TEXTS (1 << 0)
+#define CTE_DUMP_FUNCS (1 << 1)
+
+void cte_dump_state(int fd, unsigned flags);
 
 #ifdef __cplusplus
 }

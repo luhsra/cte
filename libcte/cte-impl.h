@@ -66,7 +66,11 @@ typedef struct cte_stat {
     uint64_t  init_time;
     uint64_t  wipe_time;
     uint64_t  wipe_count;
-    uint64_t  restore_count;
+    uint64_t  restore_count; // total number of restores invocations
+    uint64_t  restore_time;  // total number of wipes
+    uint64_t  loaded_count;  // reset on wipe
+    uint64_t  loaded_bytes;  // reset on wipe
+
     uint32_t *restore_times;
 } cte_stat_t;
 

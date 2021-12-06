@@ -623,10 +623,9 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
 CTE_ESSENTIAL_USED
 static int cte_restore(void *addr, void *post_call_addr) {
 #if CONFIG_STAT
-    cte_stat.restore_count++;
-
     struct timespec ts0;
     if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+    cte_stat.restore_count += 1;
 #endif
 
     cte_implant *implant = addr;
@@ -694,6 +693,10 @@ static int cte_restore(void *addr, void *post_call_addr) {
     cte_modify_begin(addr, f->size);
     memcpy(addr, f->body, f->size);
     cte_modify_end(addr, f->size);
+#if CONFIG_STAT
+    cte_stat.loaded_count += 1;
+    cte_stat.loaded_bytes += f->size;
+#endif
 
     // Load the sibling
     if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
@@ -703,6 +706,11 @@ static int cte_restore(void *addr, void *post_call_addr) {
             cte_modify_begin(func_sibling->vaddr, func_sibling->size);
             memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
             cte_modify_end(func_sibling->vaddr, func_sibling->size);
+
+#if CONFIG_STAT
+            cte_stat.loaded_count += 1;
+            cte_stat.loaded_bytes += func_sibling->size;
+#endif
         }
     }
 
@@ -710,7 +718,9 @@ static int cte_restore(void *addr, void *post_call_addr) {
     struct timespec ts;
     if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts) == -1) cte_die("clock_gettime");
 
-    cte_stat.restore_times[func_id(f)] = timespec_diff_ns(ts0, ts);
+    uint64_t restore_time = timespec_diff_ns(ts0, ts);
+    cte_stat.restore_time += restore_time;
+    cte_stat.restore_times[func_id(f)] = restore_time;
      // cte_printf("%d ns\n", timespec_diff_ns(ts0, ts));
 #endif
 
@@ -968,9 +978,6 @@ int cte_wipe(void) {
 
     int wipe_count = 0;
     for (cte_function *f = fs; f < fs + functions.length; f++) {
-        // Reset wipe time
-        cte_stat.restore_times[func_id(f)] = 0;
-
         if (f->body && !f->essential && f != cf && cte_func_loaded(f)) {
             cte_wipe_fn(f);
             wipe_count += 1;
@@ -984,52 +991,65 @@ int cte_wipe(void) {
     struct timespec ts1;
     if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts1) == -1) cte_die("clock_gettime");
 
-    cte_stat.wipe_count = wipe_count;
-    cte_stat.wipe_time  = timespec_diff_ns(ts0, ts1);
+    cte_stat.wipe_count += wipe_count;
+    cte_stat.wipe_time  += timespec_diff_ns(ts0, ts1);
+
+    cte_stat.loaded_count = 0;
+    cte_stat.loaded_bytes = 0;
     cte_printf("wipe time: %d ms\n", (uint32_t) (cte_stat.wipe_time/1e6));
 #endif
 
     return wipe_count;
 }
 
-void cte_dump_state(int fd) {
+void cte_dump_state(int fd, unsigned flags) {
+    
     cte_fdprintf(fd, "{\n");
 
 #define HEX32(x) ((x) >> 32), ((x) & 0xffffffff)
     cte_fdprintf(fd, "  \"init_time\": 0x%x%x,\n", HEX32(cte_stat.init_time));
-    cte_fdprintf(fd, "  \"wipe_time\": 0x%x%x,\n", HEX32(cte_stat.wipe_time));
-#undef HEX32
     cte_fdprintf(fd, "  \"wipe_count\": %d,\n", cte_stat.wipe_count);
-    
-    cte_text *text;
-    cte_fdprintf(fd, "  \"texts\": [\n");
-    unsigned idx = 0;
-    for_each_cte_vector(&texts, text) {
-        cte_fdprintf(fd, "    [%d, \"%s\", %d],\n", idx++, text->filename, text->size);
+    cte_fdprintf(fd, "  \"wipe_time\": 0x%x%x,\n", HEX32(cte_stat.wipe_time));
+    cte_fdprintf(fd, "  \"restore_count\": %d,\n", cte_stat.restore_count);
+    cte_fdprintf(fd, "  \"restore_time\": 0x%x%x,\n", HEX32(cte_stat.restore_time));
+    cte_fdprintf(fd, "  \"loaded_count\": %d,\n", cte_stat.loaded_count);
+    cte_fdprintf(fd, "  \"loaded_bytes\": %d,\n", cte_stat.loaded_bytes);
+#undef HEX32
+
+    if (flags & CTE_DUMP_TEXTS) {
+        cte_text *text;
+        cte_fdprintf(fd, "  \"texts\": [\n");
+        unsigned idx = 0;
+        for_each_cte_vector(&texts, text) {
+            cte_fdprintf(fd, "    [%d, \"%s\", %d],\n", idx++, text->filename, text->size);
+        }
+        cte_fdprintf(fd, "  ],\n");
     }
-    cte_fdprintf(fd, "  ],\n");
 
-    cte_function *func;
-    cte_fdprintf(fd, "  \"functions\": [\n");
-    for_each_cte_vector(&functions, func) {
-        if (!func->body) continue;
+    if (flags & CTE_DUMP_FUNCS) {
+        cte_function *func;
 
-        bool loaded = cte_func_loaded(func);
-        cte_text *text = cte_vector_get(&texts, func->text_idx);
+        cte_fdprintf(fd, "  \"functions\": [\n");
+        for_each_cte_vector(&functions, func) {
+            if (!func->body) continue;
 
-        cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, %d],\n",
-                     func->text_idx, func->name, func->size,
-                     func->vaddr - text->vaddr + text->offset,
-                     loaded ? "True": "False",
-                     func->essential ? "True": "False",
+            bool loaded = cte_func_loaded(func);
+            cte_text *text = cte_vector_get(&texts, func->text_idx);
+
+            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, %d],\n",
+                         func->text_idx, func->name, func->size,
+                         func->vaddr - text->vaddr + text->offset,
+                         loaded ? "True": "False",
+                         func->essential ? "True": "False",
 #if CONFIG_STAT
-                     cte_stat.restore_times[func_id(func)]
+                         cte_stat.restore_times[func_id(func)]
 #else
-                     -1
+                         -1
 #endif
-            );
+                );
+        }
+        cte_fdprintf(fd, "  ],\n");
     }
-    cte_fdprintf(fd, "  ],\n");
 
     cte_fdprintf(fd, "}\n\1");
 }

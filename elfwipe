@@ -4,36 +4,41 @@ import sys
 import pandas as pd
 import os
 
-if len(sys.argv) < 3:
-    sys.exit(f"{sys.argv[0]} <cte.dict> <outdir>")
-
-with open(sys.argv[1]) as fd:
-    data = eval(fd.read())
-
-if not os.path.isdir(sys.argv[2]):
-    sys.exit("Second argument must be directory")
-
-texts = pd.DataFrame(data['texts'], columns=["text_idx", "filename", "bytes"])
-texts.set_index('text_idx', inplace=True)
-funcs = pd.DataFrame(data['functions'], columns=["text_idx", "name", "bytes", "offset", "loaded"])
-
-for text_idx, row in texts.iterrows():
-    # Read in ELF
-    with open(row.filename, "rb") as fd:
+def elfwipe(kill_funcs, shared_object, outdir):
+    with open(shared_object, "rb") as fd:
         elf = bytearray(fd.read())
 
-    kill = funcs[(funcs.text_idx == text_idx) & (funcs.loaded == False)]
-
     wiped = 0
-    for _, func in kill.iterrows():
+    for _, func in kill_funcs.iterrows():
         # FIXME: trampoline
         wiped += func.bytes
         for idx in range(func.offset, func.offset+func.bytes):
             elf[idx] = 0xcc
 
-    fn = os.path.join(sys.argv[2], os.path.basename(row.filename))
+    fn = os.path.join(outdir, os.path.basename(shared_object))
     print(f"wipe: {fn}, {wiped} bytes")
     with open(fn, "wb+") as fd:
         fd.write(elf)
-    
 
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        sys.exit(f"{sys.argv[0]} <cte.dict> <outdir>")
+
+    if not os.path.isdir(sys.argv[2]):
+        sys.exit("Second argument must be directory")
+
+    with open(sys.argv[1]) as fd:
+        records = fd.read().split("\1")
+        for data in records:
+            if not data: continue
+            data = eval(data)
+            texts = pd.DataFrame(data['texts'], columns=["text_idx", "filename", "bytes"])
+            texts.set_index('text_idx', inplace=True)
+            funcs = pd.DataFrame(data['functions'], columns=["text_idx", "name", "bytes", "offset", "loaded", "essential", "restore_time"])
+
+            for text_idx, row in texts.iterrows():
+                kill = funcs[(funcs.text_idx == text_idx) & (funcs.loaded == False)]
+                elfwipe(kill, row.filename, sys.argv[2])
+
+            break
