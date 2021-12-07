@@ -64,14 +64,23 @@ typedef struct __attribute__((packed)) cte_implant {
 #if CONFIG_STAT
 typedef struct cte_stat {
     uint64_t  init_time;
-    uint64_t  wipe_time;
-    uint64_t  wipe_count;
+    
     uint64_t  restore_count; // total number of restores invocations
-    uint64_t  restore_time;  // total number of wipes
-    uint64_t  loaded_count;  // reset on wipe
-    uint64_t  loaded_bytes;  // reset on wipe
+    uint64_t  restore_time;  // cumulative restore time
+    uint64_t *restore_times;
+    
+    uint64_t  last_wipe_time; // how long did the last wipe take
+    uint64_t  last_wipe_count; // how many functions were wiped
+    uint64_t  last_wipe_bytes; // how many bytes were wiped
+    struct timespec  last_wipe_timestamp;
 
-    uint32_t *restore_times;
+
+    uint64_t  cur_wipe_count; // how many functions are still wiped
+    uint64_t  cur_wipe_bytes; // how many bytes are still wiped
+
+
+    uint32_t  text_bytes; // sum of all text-segment bytes
+    uint32_t  function_bytes; // sum of all text-segment bytes
 } cte_stat_t;
 
 #define timespec_diff_ns(ts0, ts)   (((ts).tv_sec - (ts0).tv_sec)*1000*1000*1000 + ((ts).tv_nsec - (ts0).tv_nsec))
