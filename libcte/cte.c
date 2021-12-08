@@ -740,6 +740,12 @@ static int cte_restore(void *addr, void *post_call_addr) {
     if (cte_check_call(addr, cf, 2))
         goto allowed;
 
+    // Last resort: glibc magic
+    // FIXME: this should be handled by the gcc plugin
+    if (strncmp("_IO_", f->name, strlen("_IO_")) == 0)
+        goto allowed;
+    if (strncmp("__GI___", f->name, strlen("__GI___")) == 0)
+        goto allowed;
 
     // Failed to find the callee
     cte_debug_restore(addr, post_call_addr, f, cf);
