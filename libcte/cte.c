@@ -585,36 +585,59 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
                               cte_function *function,
                               cte_function *caller) {
     cte_text *function_text = cte_vector_get(&texts, function->text_idx);
-    cte_text *caller_text = cte_vector_get(&texts, caller->text_idx);
+    cte_text *caller_text = NULL;
+    char *caller_rel_name;
+    uintptr_t caller_rel_offset;
+    if (caller) {
+        caller_text = cte_vector_get(&texts, caller->text_idx);
+        caller_rel_name = caller->name;
+        caller_rel_offset = post_call_addr - caller->vaddr;
+    } else {
+        // Find nearest text before post_call_addr
+        cte_text *t = NULL;
+        for_each_cte_vector(&texts, t) {
+            if (t->vaddr > post_call_addr &&
+                (!caller_text ||
+                 post_call_addr - t->vaddr < post_call_addr - caller_text->vaddr))
+                caller_text = t;
+        }
+        caller_rel_name = "??";
+        caller_rel_offset = 0;
+    }
 
     cte_printf("---------\n");
-    cte_printf("Function %s (%p [%s]) called before %s+%p (%p [%s])\n",
+    cte_printf("Function %s (%p, %s [x+%p])\n",
                function->name, addr, function_text->filename,
-               caller->name, post_call_addr - caller->vaddr,
-               post_call_addr, caller_text->filename);
+               addr - function_text->vaddr);
+    cte_printf("called before %s+%p (%p, %s [x+%p])\n",
+               caller_rel_name, caller_rel_offset, post_call_addr,
+               (caller_text) ? caller_text->filename : "??",
+               (caller_text) ? (post_call_addr - caller_text->vaddr) : 0);
 
-    cte_printf("Allowed callees (%d)\n", caller->info_fn->calles_count);
-    for (int i = 0; i < caller->info_fn->calles_count; i++) {
-        void *callee = caller->info_fn->callees[i];
-        cte_function *cd = bsearch(callee, functions.front, functions.length,
-                                   sizeof(cte_function),
-                                   cte_find_compare_function);
-        if (cd) {
-            cte_printf("  %p: %s\n", callee, cd->name);
-        } else {
-            cte_plt *p, *plt = NULL;
-            for_each_cte_vector(&plts, p) {
-                if (callee >= p->vaddr && callee < (p->vaddr + p->size)) {
-                    plt = p;
-                    break;
-                }
-            }
-            if (plt) {
-                cte_text *text = cte_vector_get(&texts, plt->text_idx);
-                cte_printf("  %p: .plt+%p [%s]\n", callee, callee - plt->vaddr,
-                           text->filename);
+    if (caller && caller->info_fn) {
+        cte_printf("Allowed callees (%d)\n", caller->info_fn->calles_count);
+        for (int i = 0; i < caller->info_fn->calles_count; i++) {
+            void *callee = caller->info_fn->callees[i];
+            cte_function *cd = bsearch(callee, functions.front, functions.length,
+                                       sizeof(cte_function),
+                                       cte_find_compare_function);
+            if (cd) {
+                cte_printf("  %p: %s\n", callee, cd->name);
             } else {
-                cte_printf("  %p: ??\n", callee);
+                cte_plt *p, *plt = NULL;
+                for_each_cte_vector(&plts, p) {
+                    if (callee >= p->vaddr && callee < (p->vaddr + p->size)) {
+                        plt = p;
+                        break;
+                    }
+                }
+                if (plt) {
+                    cte_text *text = cte_vector_get(&texts, plt->text_idx);
+                    cte_printf("  %p: .plt+%p [%s]\n", callee,
+                               callee - plt->vaddr, text->filename);
+                } else {
+                    cte_printf("  %p: ??\n", callee);
+                }
             }
         }
     }
@@ -623,6 +646,58 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
 #else
 #define cte_debug_restore(addr, post_call_addr, function, caller)
 #endif
+
+CTE_ESSENTIAL
+static bool cte_check_call(void* call_addr, cte_function *caller, int depth) {
+    if (!caller->info_fn)
+        return true;
+
+    // A caller function was found, and it has a info_fn
+    // Let's see if we are allowed to call function f
+    for (int i = 0; i < caller->info_fn->calles_count; i++) {
+        void *callee = caller->info_fn->callees[i];
+        if (callee == call_addr) {
+            return true;
+        }
+        // Maybe the callee is a pointer to a .plt section
+        // FIXME: performance?
+        cte_plt *pa = plts.front;
+        for (cte_plt *p = pa; p < &pa[plts.length]; p++) {
+            if (callee >= p->vaddr &&
+                (uint8_t*)callee < ((uint8_t*)p->vaddr + p->size)) {
+                void *real_callee = cte_decode_plt(callee);
+                if (real_callee == call_addr) {
+                    // Update the callee pointer in order to avoid checking
+                    // the plts in the future for this callee.
+                    // FIXME: This should be safe...
+                    // FIXME: However, this should not be allowed.
+                    //        As an attacker might tamper callee addresses.
+                    // NOTE:  The recursive callee check below relies on it.
+                    caller->info_fn->callees[i] = real_callee;
+                    return true;
+                }
+            }
+        }
+    }
+
+    // In some cases functions are called with a jump instruction and reuse
+    // their parent's frame.
+    // In these situations we won't find the real caller via the return pointer
+    // To solve this, we recursively iterate the calles and check their callees.
+    // Nesting is bound (by the depth argument) to avoid recursion.
+    if (depth-- >= 0) {
+        for (int i = 0; i < caller->info_fn->calles_count; i++) {
+            void *callee = caller->info_fn->callees[i];
+            cte_function *cf = bsearch(callee, functions.front, functions.length,
+                                       sizeof(cte_function),
+                                       cte_find_compare_function);
+            if (cf && cte_check_call(call_addr, cf, depth))
+                return true;
+        }
+    }
+
+    return false;
+}
 
 CTE_ESSENTIAL_USED
 static int cte_restore(void *addr, void *post_call_addr) {
@@ -657,39 +732,18 @@ static int cte_restore(void *addr, void *post_call_addr) {
     // Find the caller
     cf = bsearch(post_call_addr, functions.front, functions.length,
                  sizeof(cte_function), cte_find_compare_in_function);
-
-    goto allowed;
-
-    if (cf && cf->info_fn) {
-        // A caller function was found, and it has a info_fn
-        // Let's see if we are allowed to call function f
-        for (int i = 0; i < cf->info_fn->calles_count; i++) {
-            void *callee = cf->info_fn->callees[i];
-            if (callee == addr) {
-                goto allowed;
-            }
-            // Maybe the callee is a pointer to a .plt section
-            // FIXME: performance?
-            cte_plt *pa = plts.front;
-            for (cte_plt *p = pa; p < &pa[plts.length]; p++) {
-                if (callee >= p->vaddr &&
-                    (uint8_t*)callee < ((uint8_t*)p->vaddr + p->size)) {
-                    void *real_callee = cte_decode_plt(callee);
-                    if (real_callee == addr) {
-                        // Update the callee pointer in order to avoid checking
-                        // the plts in the future for this callee.
-                        // FIXME: this should be safe...
-                        cf->info_fn->callees[i] = real_callee;
-                        goto allowed;
-                    }
-                }
-            }
-        }
-
-        // Failed to find the callee
+    if (!cf) {
+        cte_die("Caller not found\n");
         cte_debug_restore(addr, post_call_addr, f, cf);
-        cte_die("Unrecognized callee\n");
     }
+
+    if (cte_check_call(addr, cf, 2))
+        goto allowed;
+
+
+    // Failed to find the callee
+    cte_debug_restore(addr, post_call_addr, f, cf);
+    cte_die("Unrecognized callee\n");
 
     allowed:
     // cte_printf("-> load: %s (caller: %s)\n", f->name, cf ? cf->name : "<unknown>");
