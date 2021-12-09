@@ -648,7 +648,7 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
 #endif
 
 CTE_ESSENTIAL
-static bool cte_check_call(void* call_addr, cte_function *caller, int depth) {
+static bool cte_check_call(void* called_addr, cte_function *caller, int depth) {
     if (!caller->info_fn)
         return true;
 
@@ -656,7 +656,7 @@ static bool cte_check_call(void* call_addr, cte_function *caller, int depth) {
     // Let's see if we are allowed to call function f
     for (int i = 0; i < caller->info_fn->calles_count; i++) {
         void *callee = caller->info_fn->callees[i];
-        if (callee == call_addr) {
+        if (callee == called_addr) {
             return true;
         }
         // Maybe the callee is a pointer to a .plt section
@@ -666,14 +666,16 @@ static bool cte_check_call(void* call_addr, cte_function *caller, int depth) {
             if (callee >= p->vaddr &&
                 (uint8_t*)callee < ((uint8_t*)p->vaddr + p->size)) {
                 void *real_callee = cte_decode_plt(callee);
-                if (real_callee == call_addr) {
-                    // Update the callee pointer in order to avoid checking
-                    // the plts in the future for this callee.
-                    // FIXME: This should be safe...
-                    // FIXME: However, this should not be allowed.
-                    //        As an attacker might tamper callee addresses.
-                    // NOTE:  The recursive callee check below relies on it.
-                    caller->info_fn->callees[i] = real_callee;
+
+                // Update the callee pointer in order to avoid checking
+                // the plts in the future for this callee.
+                // FIXME: This should be safe...
+                // FIXME: However, this should not be allowed.
+                //        As an attacker might tamper callee addresses.
+                // NOTE:  The recursive callee check below relies on it.
+                caller->info_fn->callees[i] = real_callee;
+
+                if (real_callee == called_addr) {
                     return true;
                 }
             }
@@ -685,13 +687,13 @@ static bool cte_check_call(void* call_addr, cte_function *caller, int depth) {
     // In these situations we won't find the real caller via the return pointer
     // To solve this, we recursively iterate the calles and check their callees.
     // Nesting is bound (by the depth argument) to avoid recursion.
-    if (depth-- >= 0) {
+    if (depth > 0) {
         for (int i = 0; i < caller->info_fn->calles_count; i++) {
             void *callee = caller->info_fn->callees[i];
             cte_function *cf = bsearch(callee, functions.front, functions.length,
                                        sizeof(cte_function),
                                        cte_find_compare_function);
-            if (cf && cte_check_call(call_addr, cf, depth))
+            if (cf && cte_check_call(called_addr, cf, depth - 1))
                 return true;
         }
     }
@@ -717,7 +719,6 @@ static int cte_restore(void *addr, void *post_call_addr) {
         cte_die("Could not find function with id %d (max_id=%d)\n",
                 implant->func_idx, functions.length);
 
-    cte_function * cf = NULL;
     /*
     cte_function *f2 = bsearch(implant, functions.front, functions.length,
                                sizeof(cte_function), cte_find_compare_function);
@@ -730,21 +731,14 @@ static int cte_restore(void *addr, void *post_call_addr) {
         goto allowed;
 
     // Find the caller
-    cf = bsearch(post_call_addr, functions.front, functions.length,
-                 sizeof(cte_function), cte_find_compare_in_function);
+    cte_function *cf = bsearch(post_call_addr, functions.front, functions.length,
+                               sizeof(cte_function), cte_find_compare_in_function);
     if (!cf) {
-        cte_die("Caller not found\n");
         cte_debug_restore(addr, post_call_addr, f, cf);
+        cte_die("Caller not found\n");
     }
 
     if (cte_check_call(addr, cf, 2))
-        goto allowed;
-
-    // Last resort: glibc magic
-    // FIXME: this should be handled by the gcc plugin
-    if (strncmp("_IO_", f->name, strlen("_IO_")) == 0)
-        goto allowed;
-    if (strncmp("__GI___", f->name, strlen("__GI___")) == 0)
         goto allowed;
 
     // Failed to find the callee
