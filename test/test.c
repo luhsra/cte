@@ -59,7 +59,7 @@ int rec(int i) {
 int main(void) {
     void *libssl = dlopen("libssl.so", RTLD_NOW | RTLD_GLOBAL);
     int fd = open("test.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
-    int rc = cte_init();
+    int rc = cte_init(0);
     if (rc < 0) {
         perror("CTE Error");
         return 2;
@@ -74,7 +74,7 @@ int main(void) {
     test1();
     other1();
 
-    cte_dump_state(fd);
+    cte_dump_state(fd, CTE_DUMP_TEXTS|CTE_DUMP_FUNCS);
 
     return 0;
 }

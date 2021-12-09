@@ -20,7 +20,11 @@ int cte_init(int flags);
 
 int cte_mmview_unshare(void);
 
-int cte_wipe(void);
+void cte_enable_threshold();
+int cte_wipe_threshold(int threshold, int min_wipe);
+#define cte_wipe() cte_wipe_threshold(0, 0)
+
+
 
 #define CTE_DUMP_TEXTS (1 << 0)
 #define CTE_DUMP_FUNCS (1 << 1)

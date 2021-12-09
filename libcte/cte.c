@@ -46,6 +46,17 @@ static void cte_stat_init() {
 }
 #endif
 
+struct cte_wipestat {
+    uint16_t wipe;
+    uint16_t restore;
+};
+static __thread struct cte_wipestat *wipestat;
+
+void cte_enable_threshold() {
+    if (!wipestat)
+        wipestat = calloc(functions.length, sizeof(*wipestat));
+}
+
 
 static void cte_restore_entry(void);
 
@@ -515,7 +526,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             // memset
             {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
             // restore
-            {0, "bsearch"},
+            {0, "bsearch"}, {0, "__tls_get_addr"},
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
@@ -751,7 +762,7 @@ static int cte_restore(void *addr, void *post_call_addr) {
     cte_die("Unrecognized callee\n");
 
     allowed:
-    // cte_printf("-> load: %s (caller: %s)\n", f->name, cf ? cf->name : "<unknown>");
+    // cte_printf("-> load: %s\n", f->name);
     // Load the called function
     cte_modify_begin(addr, f->size);
     memcpy(addr, f->body, f->size);
@@ -774,8 +785,13 @@ static int cte_restore(void *addr, void *post_call_addr) {
             cte_stat.cur_wipe_count -= 1;
             cte_stat.cur_wipe_bytes -= func_sibling->size;
 #endif
+            if (wipestat) wipestat[func_id(func_sibling)].restore++;
+
         }
     }
+
+    if (wipestat) wipestat[func_id(f)].restore ++;
+
 
 #if CONFIG_STAT
     struct timespec ts;
@@ -1032,7 +1048,7 @@ int cte_mmview_unshare(void) {
 
 
 CTE_ESSENTIAL
-int cte_wipe(void) {
+int cte_wipe_threshold(int threshold, int min_wipe) {
 #if CONFIG_STAT
     struct timespec ts0;
     if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
@@ -1053,6 +1069,19 @@ int cte_wipe(void) {
     int wipe_bytes = 0;
     for (cte_function *f = fs; f < fs + functions.length; f++) {
         if (!f->body) continue; // Aliases
+
+        // WIPESTAT: If a function reaches a given threshold, it is no
+        // longer wiped, as we assume it is loaded every time
+        if (wipestat && threshold > 0 && wipestat[func_id(f)].wipe > min_wipe) {
+            int percentage =
+                wipestat[func_id(f)].restore * 100
+                / wipestat[func_id(f)].wipe;
+            if (percentage >= threshold) {
+                // cte_printf("nowipe %s, percentage: %d, threshold:%d\n", f->name, percentage, threshold);
+                continue;
+            }
+        }
+
         if (!f->essential && f != cf) {
             if (cte_func_loaded(f)) {
                 if (cte_wipe_fn(f)) { // Wipe Function!
@@ -1063,6 +1092,14 @@ int cte_wipe(void) {
                 // The function is still wiped, account for that
                 wipe_count += 1;
                 wipe_bytes += f->size;
+            }
+            // WIPESTAT: Limit wipe statistics and Increment wipe counters
+            if (wipestat) {
+                if (wipestat[func_id(f)].wipe > 50000) {
+                    wipestat[func_id(f)].wipe    /= 2;
+                    wipestat[func_id(f)].restore /= 2;
+                }
+                wipestat[func_id(f)].wipe++;
             }
         }
     }
@@ -1082,7 +1119,7 @@ int cte_wipe(void) {
     cte_stat.cur_wipe_count = wipe_count;
     cte_stat.cur_wipe_bytes = wipe_bytes;
 
-    cte_printf("wipe time: %d ms\n", (uint32_t) (cte_stat.last_wipe_time/1e6));
+    // cte_printf("wipe time: %d ms\n", (uint32_t) (cte_stat.last_wipe_time/1e6));
 #endif
 
     return wipe_count;

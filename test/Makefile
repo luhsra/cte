@@ -14,12 +14,18 @@ LDFLAGS += -L$(LIBRARY_DIR)
 LIBS    += -lelf -ldl
 SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
-PRODUCT = test
+PRODUCT = test repeated
 
 .PHONY: clean always
 
-$(PRODUCT): $(OBJECTS) $(LIBRARY)
+all: ${PRODUCT}
+
+test: test.o other.o $(LIBRARY)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+
+repeated: repeated.o $(LIBRARY)
+	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+
 
 $(LIBRARY): always
 	$(MAKE) -C $(LIBRARY_DIR)
