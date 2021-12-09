@@ -28,6 +28,8 @@ CTE_SEALED static cte_vector functions; // vector of cte_function
 CTE_SEALED static void *bodies;         // stores function bodies
 CTE_SEALED static size_t bodies_size;
 
+CTE_SEALED static bool strict_callgraph;
+
 static void *cte_sealed_sec_vaddr = NULL;
 static size_t cte_sealed_sec_size = 0;
 
@@ -726,6 +728,9 @@ static int cte_restore(void *addr, void *post_call_addr) {
         cte_die("Bsearch yielded a different result...\n");
     */
 
+    if (!strict_callgraph)
+        goto allowed;
+
     // The function can be inserted if its address is taken
     if (f->info_fn && (f->info_fn->flags | FLAG_ADDRESS_TAKEN))
         goto allowed;
@@ -878,7 +883,7 @@ static int cte_wipe_fn(cte_function *fn) {
     return 1;
 }
 
-int cte_init(void) {
+int cte_init(int flags) {
 #if CONFIG_STAT
     struct timespec ts0;
     if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
@@ -886,6 +891,8 @@ int cte_init(void) {
     cte_stat.text_bytes     = 0;
     cte_stat.function_bytes = 0;
 #endif
+
+    strict_callgraph = flags & CTE_STRICT_CALLGRAPH;
 
     cte_vector_init(&functions,  sizeof(cte_function));
     cte_vector_init(&texts,      sizeof(cte_text));

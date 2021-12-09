@@ -12,7 +12,11 @@ enum cte_error {
     CTE_ERROR_SIGNAL = -4,
 };
 
-int cte_init(void);
+enum cte_flags {
+    CTE_STRICT_CALLGRAPH = 1,
+};
+
+int cte_init(int flags);
 
 int cte_mmview_unshare(void);
 
