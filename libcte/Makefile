@@ -3,7 +3,7 @@
 CONFIG_PRINT ?= 1
 CONFIG_STAT  ?= 1
 
-SOURCES = cte.c
+SOURCES = cte.c cte-asm.S
 ifeq ($(CONFIG_PRINT), 1)
 SOURCES += cte-printf.c
 endif
@@ -26,6 +26,10 @@ libcte.a: $(OBJECTS)
 .SECONDEXPANSION:
 %.o: %.c $$*.h cte-impl.h $(MAKEFILE_LIST)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+%.o: %.S  $(MAKEFILE_LIST)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 
 clean:
 	rm -f ${PRODUCTS} $(OBJECTS)
