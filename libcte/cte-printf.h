@@ -2,15 +2,14 @@
 
 #include "cte-impl.h"
 
-#ifdef CONFIG_PRINT
+#if CONFIG_PRINT
 CTE_ESSENTIAL int cte_vsprintf(char * buf, const char * fmt, va_list va);
 CTE_ESSENTIAL int cte_sprintf(char * buf, const char * fmt, ...);
 CTE_ESSENTIAL int cte_fdprintf(int fd, const char * fmt, ...);
 #define cte_printf(...) cte_fdprintf(1, __VA_ARGS__)
 
-#ifdef CONFIG_DEBUG
+#if CONFIG_DEBUG
 #define cte_debug(...) cte_fdprintf(2, "DEBUG: " __VA_ARGS__)
-#warning asdas
 #else
 #define cte_debug(...) ((void)0)
 #endif

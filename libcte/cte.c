@@ -37,7 +37,7 @@ static size_t cte_sealed_sec_size = 0;
 #define FUNC_ID_INVALID (uint32_t)(~0)
 
 #if CONFIG_STAT
-static cte_stat_t cte_stat;
+cte_stat_t cte_stat;
 
 static void cte_stat_init() {
     cte_stat.init_time = 0;
@@ -48,6 +48,7 @@ static void cte_stat_init() {
 #define CLOCK_LIBCTE CLOCK_REALTIME
 #endif
 
+#if CONFIG_THRESHOLD
 struct cte_wipestat {
     uint16_t wipe;
     uint16_t restore;
@@ -59,6 +60,7 @@ void cte_enable_threshold() {
     if (!__wipestat)
         __wipestat = calloc(functions.length, sizeof(*__wipestat));
 }
+#endif
 
 struct build_id_note {
     ElfW(Nhdr) nhdr;
@@ -521,12 +523,16 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"}, {0, "start_thread"},
             // mprotect
             {0, "mprotect"}, {0, "pkey_mprotect"}, {0, "__mprotect"},
-            // memcpy
-            {0, "memcpy@GLIBC_2.2.5"}, {0, "__memcpy_avx_unaligned_erms"},
-            // memset
-            {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
+            // // memcpy
+            // {0, "memcpy@GLIBC_2.2.5"}, {0, "__memcpy_avx_unaligned_erms"},
+            // // memset
+            // {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
             // restore
-            {0, "bsearch"}, {0, "__tls_get_addr"}, {0, "_dl_update_slotinfo"}, {0, "update_get_addr"},
+            {0, "bsearch"},
+#if CONFIG_THRESHOLD
+            // threshold wiping
+            {0, "__tls_get_addr"}, {0, "_dl_update_slotinfo"}, {0, "update_get_addr"},
+#endif
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
@@ -594,7 +600,32 @@ static void *cte_decode_plt(void *entry) {
     return (void*)(*got_entry);
 }
 
-#ifdef CONFIG_PRINT
+#pragma GCC push_options
+#pragma GCC optimize ("-fno-tree-loop-distribute-patterns")
+__attribute__((noinline))
+CTE_ESSENTIAL
+static void *cte_memcpy(void *dst, const void *src,size_t n)
+{
+    size_t i;
+
+    for (i=0;i<n;i++)
+        *(char *) dst++ = *(char *) src++;
+    return dst;
+}
+__attribute__((noinline))
+CTE_ESSENTIAL
+static void *cte_memset(void *dst, int pat, size_t n)
+{
+    size_t i;
+
+    for (i=0;i<n;i++)
+        *(char *) dst++ = (char)pat;
+    return dst;
+}
+#pragma GCC pop_options
+
+
+#if CONFIG_DEBUG
 CTE_ESSENTIAL_USED
 static void cte_debug_restore(void *addr, void *post_call_addr,
                               cte_function *function,
@@ -768,14 +799,16 @@ int cte_restore(void *addr, void *post_call_addr) {
     // Load the called function
 
     cte_modify_begin(addr, f->size);
-    memcpy(addr, f->body, f->size);
+    cte_memcpy(addr, f->body, f->size);
     cte_modify_end(addr, f->size);
 #if CONFIG_STAT
     cte_stat.cur_wipe_count -= 1;
     cte_stat.cur_wipe_bytes -= f->size;
 #endif
 
+#if CONFIG_THRESHOLD
     struct cte_wipestat *wipestat = cte_get_wipestat();
+#endif
 
     // Load the sibling
     if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
@@ -783,20 +816,22 @@ int cte_restore(void *addr, void *post_call_addr) {
         if (!cte_func_loaded(func_sibling)) {
             // cte_printf("-> load sibling: %s\n", func_sibling->name);
             cte_modify_begin(func_sibling->vaddr, func_sibling->size);
-            memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
+            cte_memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
             cte_modify_end(func_sibling->vaddr, func_sibling->size);
 
 #if CONFIG_STAT
             cte_stat.cur_wipe_count -= 1;
             cte_stat.cur_wipe_bytes -= func_sibling->size;
 #endif
+#if CONFIG_THRESHOLD
             if (wipestat) wipestat[func_id(func_sibling)].restore++;
+#endif
 
         }
     }
-
+#if CONFIG_THRESHOLD
     if (wipestat) wipestat[func_id(f)].restore ++;
-
+#endif
 
 #if CONFIG_STAT
     struct timespec ts;
@@ -827,7 +862,7 @@ static int cte_wipe_fn(cte_function *fn) {
     cte_implant_init(implant, func_id(fn));
 
     // Wipe the rest of the function body
-    memset(fn->vaddr + sizeof(cte_implant),
+    cte_memset(fn->vaddr + sizeof(cte_implant),
            0xcc, // int3 int3 int3...
            fn->size  - sizeof(cte_implant));
 
@@ -984,6 +1019,7 @@ int cte_mmview_unshare(void) {
 
 CTE_ESSENTIAL
 int cte_wipe_threshold(int threshold, int min_wipe) {
+    (void) threshold; (void) min_wipe;
 #if CONFIG_STAT
     //if (cte_stat.wipe_count) {
     //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));
@@ -1008,12 +1044,15 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
     int wipe_count = 0;
     int wipe_bytes = 0;
 
+#if CONFIG_THRESHOLD
     // Copy Thread local pointer
     struct cte_wipestat *wipestat = cte_get_wipestat();
+#endif
     
     for (cte_function *f = fs; f < fs + functions.length; f++) {
         if (!f->body) continue; // Aliases
 
+#if CONFIG_THRESHOLD
         // WIPESTAT: If a function reaches a given threshold, it is no
         // longer wiped, as we assume it is loaded every time
         if (wipestat && threshold > 0 && wipestat[func_id(f)].wipe > min_wipe) {
@@ -1025,6 +1064,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
                 continue;
             }
         }
+#endif
 
         if (!f->essential && f != cf) {
             if (cte_func_loaded(f)) {
@@ -1038,6 +1078,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
                 wipe_bytes += f->size;
             }
             // WIPESTAT: Limit wipe statistics and Increment wipe counters
+#if CONFIG_THRESHOLD
             if (wipestat) {
                 if (wipestat[func_id(f)].wipe > 50000) {
                     wipestat[func_id(f)].wipe    /= 2;
@@ -1045,6 +1086,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
                 }
                 wipestat[func_id(f)].wipe++;
             }
+#endif
         }
     }
 
