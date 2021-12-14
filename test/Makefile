@@ -7,6 +7,8 @@ PLUGIN_DIR=../gcc-plugin
 PLUGIN=$(PLUGIN_DIR)/cte.so
 LIBRARY_DIR=../libcte
 LIBRARY=$(LIBRARY_DIR)/libcte.so
+LIBRARY_MINIMAL=$(LIBRARY_DIR)/libcte-minimal.a
+
 
 # -falign-functions is also enabled in -O2
 CFLAGS += -Wall -Wextra -fplugin=$(PLUGIN) -I$(LIBRARY_DIR) -g -ggdb -O3 -falign-functions
@@ -26,11 +28,13 @@ test: test.o other.o $(LIBRARY)
 repeated: repeated.o $(LIBRARY)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
 
-ssl: ssl.o ssl-impl.o $(LIBRARY)
+ssl: ssl.o  $(LIBRARY_MINIMAL)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS} -lssl -lcrypto
 
+empty: empty.o $(LIBRARY_MINIMAL)
+	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
 
-$(LIBRARY): always
+$(LIBRARY) $(LIBRARY_MINIMAL): always
 	$(MAKE) -C $(LIBRARY_DIR)
 
 $(PLUGIN): always
