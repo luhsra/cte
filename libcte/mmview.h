@@ -1,4 +1,5 @@
-#include "syscall.h"
+#include <unistd.h>
+#include <syscall.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,7 +18,7 @@ static inline long mmview_migrate(long id) {
 }
 
 static inline long mmview_current(void) {
-    return syscall(444, -1);
+    return syscall(444, -1L);
 }
 
 static inline long mmview_unshare(void *start, size_t len) {
