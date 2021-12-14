@@ -26,6 +26,9 @@ test: test.o other.o $(LIBRARY)
 repeated: repeated.o $(LIBRARY)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
 
+ssl: ssl.o ssl-impl.o $(LIBRARY)
+	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS} -lssl -lcrypto
+
 
 $(LIBRARY): always
 	$(MAKE) -C $(LIBRARY_DIR)
