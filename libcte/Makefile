@@ -18,7 +18,7 @@ PRODUCTS = libcte.a libcte.so
 all: ${PRODUCTS}
 
 libcte.so: ${OBJECTS}
-	${CC} -shared ${OBJECTS} -o $@
+	${CC} -shared ${OBJECTS} -lelf -ldl -o $@
 
 libcte.a: $(OBJECTS)
 	ar rcs $@ $^
