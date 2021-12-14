@@ -52,11 +52,12 @@ struct cte_wipestat {
     uint16_t wipe;
     uint16_t restore;
 };
-static __thread struct cte_wipestat *wipestat;
+static __thread struct cte_wipestat *__wipestat;
+#define cte_get_wipestat() (__wipestat)
 
 void cte_enable_threshold() {
-    if (!wipestat)
-        wipestat = calloc(functions.length, sizeof(*wipestat));
+    if (!__wipestat)
+        __wipestat = calloc(functions.length, sizeof(*__wipestat));
 }
 
 struct build_id_note {
@@ -525,7 +526,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             // memset
             {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
             // restore
-            {0, "bsearch"}, {0, "__tls_get_addr"},
+            {0, "bsearch"}, {0, "__tls_get_addr"}, {0, "_dl_update_slotinfo"}, {0, "update_get_addr"},
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
@@ -567,6 +568,7 @@ static void cte_modify_begin(void *start, size_t size) {
     uint8_t *aligned_start = cte_align_to_page(start);
     size_t len = stop - aligned_start;
     mprotect(aligned_start, len, PROT_READ | PROT_WRITE | PROT_EXEC);
+    // cte_printf("modify_begin: [%p-%p]%p-%p\n", start, stop, aligned_start, aligned_start+len);
 }
 
 CTE_ESSENTIAL
@@ -575,7 +577,8 @@ static void cte_modify_end(void *start, size_t size) {
     uint8_t *aligned_start = cte_align_to_page(start);
     size_t len = stop - aligned_start;
     mprotect(aligned_start, len, PROT_READ | PROT_EXEC);
-    // __builtin___clear_cache((char*)aligned_start, (char*)stop);
+    __builtin___clear_cache((char*)aligned_start, (char*)stop);
+    // cte_printf("modify_end: [%p-%p]%p-%p\n", start, stop, aligned_start, aligned_start+len);
 }
 
 CTE_ESSENTIAL
@@ -771,6 +774,8 @@ int cte_restore(void *addr, void *post_call_addr) {
     cte_stat.cur_wipe_count -= 1;
     cte_stat.cur_wipe_bytes -= f->size;
 #endif
+
+    struct cte_wipestat *wipestat = cte_get_wipestat();
 
     // Load the sibling
     if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
@@ -980,9 +985,9 @@ int cte_mmview_unshare(void) {
 CTE_ESSENTIAL
 int cte_wipe_threshold(int threshold, int min_wipe) {
 #if CONFIG_STAT
-    if (cte_stat.wipe_count) {
-        cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));
-    }
+    //if (cte_stat.wipe_count) {
+    //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));
+    //}
     cte_stat.wipe_count ++;
 
     struct timespec ts0;
@@ -1002,6 +1007,10 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
 
     int wipe_count = 0;
     int wipe_bytes = 0;
+
+    // Copy Thread local pointer
+    struct cte_wipestat *wipestat = cte_get_wipestat();
+    
     for (cte_function *f = fs; f < fs + functions.length; f++) {
         if (!f->body) continue; // Aliases
 
