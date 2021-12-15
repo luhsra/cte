@@ -32,6 +32,7 @@ if __name__ == "__main__":
         records = fd.read().split("\1")
         for data in records:
             if not data: continue
+            if 'texts' not in data: continue
             data = eval(data)
             texts = pd.DataFrame(data['texts'], columns=["text_idx", "filename", "bytes"])
             texts.set_index('text_idx', inplace=True)

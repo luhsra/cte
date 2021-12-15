@@ -43,6 +43,7 @@ def analyze(data):
 
     df['loaded %'] = (df.bytes - df.sum_False)/df.bytes
     df['wipeable %'] = (df.sum_True + df.sum_False)/df.bytes
+    df['unwipeable'] = df.bytes - df.sum_Total
 
     print(df)
 
@@ -53,11 +54,10 @@ def analyze(data):
 
     funcs['memfunc'] = funcs.name.map(lambda x: x.startswith('__mem'))
     
-    x = funcs[(funcs.loaded) & (~funcs.memfunc)][['name', 'bytes']]
-    #print(x)
+    x = funcs[(funcs.loaded) & (~funcs.memfunc)][['text_idx', 'name', 'bytes']]
+    print(x.join(texts.reset_index()[['text_idx', 'filename']], on='text_idx',lsuffix="L"))
     print(len(x))
     print(sum(x.bytes))
-          
 
 
 if __name__ == "__main__":

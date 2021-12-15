@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <mmview.h>
+#include <cte.h>
+#include <stdbool.h>
+#include <fcntl.h>
 
 #include <jpeglib.h>
 #include <jerror.h>
@@ -79,6 +83,19 @@ struct imgRawImage* loadJpegImageFile(char* lpFilename) {
 
 	return lpNewImage;
 }
+
+__attribute__((weak))
+struct imgRawImage* loadJpegImageFile_wiped(long mmview, bool wipe, char* lpFilename) {
+    long previous = mmview_migrate(mmview);
+    // printf("%ld -> %ld\n",  previous, mmview);
+    if (wipe) cte_wipe();
+    struct imgRawImage *ret = loadJpegImageFile(lpFilename);
+    int rc = mmview_migrate(previous); (void) rc;
+    // printf("%ld -> %ld (%ld)\n",  mmview, rc, previous);
+
+    return ret;
+}
+
 
 void freeRawImage(struct imgRawImage *img)  {
     free(img->lpData);
@@ -167,14 +184,17 @@ int storeJpegImageFile(struct imgRawImage* lpImage, char* lpFilename) {
 #define timespec_diff_ns(ts0, ts)   (((ts).tv_sec - (ts0).tv_sec)*1000LL*1000LL*1000LL + ((ts).tv_nsec - (ts0).tv_nsec))
 int main(int argc, char *argv[]) {
     unsigned int repeat = 1;
-    if (argc > 1) {
-        repeat = atoi(argv[1]);
+    if (argc < 2) {
+        fprintf(stderr, "%s <image.jpg> [ROUNDS]\n", argv[0]);
+        return -1;
     }
+    if (argc > 2) {
+        repeat = atoi(argv[2]);
+    }
+    char *imageFile = argv[1];
 
     struct timespec ts0;
     struct timespec ts1;
-
-
 
     for (unsigned _i = 0; _i < repeat; _i ++) {
         clock_gettime(CLOCK_REALTIME, &ts0);
@@ -182,7 +202,7 @@ int main(int argc, char *argv[]) {
             // 122 ms on my machine
             // Wikimedia Image of the Day: 15th December
             // Intercession Church on the Nerl in Bogolyubovo near Vladimir, Russia
-            struct imgRawImage *image = loadJpegImageFile("test.jpg");
+            struct imgRawImage *image = loadJpegImageFile(imageFile);
 
             struct imgRawImage *grayscale = NULL;
             filterGrayscale(image, &grayscale);
@@ -194,6 +214,43 @@ int main(int argc, char *argv[]) {
         clock_gettime(CLOCK_REALTIME, &ts1);
         fprintf(stderr, "img,plain,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, IMG_ROUNDS);
     }
+
+    ////////////////////////////////////////////////////////////////
+    // With Wiping
+
+    // And now with mmview and libcte
+    cte_init(0);
+    //cte_init(0);
+    cte_mmview_unshare();
+    long img_mmview = mmview_create();
+    long previous;
+    int fd;
+
+    loadJpegImageFile_wiped(true, img_mmview, argv[1]);
+    for (unsigned _i = 0; _i < repeat; _i ++) {
+        clock_gettime(CLOCK_REALTIME, &ts0);
+        for (unsigned i = 0; i < IMG_ROUNDS; i++) {
+            // Wikimedia Image of the Day: 15th December
+            // Intercession Church on the Nerl in Bogolyubovo near Vladimir, Russia
+            struct imgRawImage *image = loadJpegImageFile_wiped(img_mmview, true, imageFile);
+
+            struct imgRawImage *grayscale = NULL;
+            filterGrayscale(image, &grayscale);
+
+            storeJpegImageFile(grayscale, "/dev/shm/grayscale.jpg");
+            freeRawImage(grayscale);
+            freeRawImage(image);
+        }
+        clock_gettime(CLOCK_REALTIME, &ts1);
+        fprintf(stderr, "img,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, IMG_ROUNDS);
+    }
+
+    fd = open("img.migrate.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
+    cte_dump_state(fd, 0);
+    previous = mmview_migrate(img_mmview); 
+    cte_dump_state(fd, CTE_DUMP_FUNCS|CTE_DUMP_TEXTS);
+    mmview_migrate(previous);
+    close(fd);
 
 
     return 0;

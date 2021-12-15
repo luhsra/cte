@@ -146,7 +146,7 @@ int main(int argc, char *argv[]) {
             check_cert_wipe(ssl_mmview, false);
         }
         clock_gettime(CLOCK_REALTIME, &ts1);
-        fprintf(stderr, "ssl,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, EMPTY_ROUNDS);
+        fprintf(stderr, "ssl,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, SSL_ROUNDS);
     }
 
     fd = open("ssl.migrate.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
