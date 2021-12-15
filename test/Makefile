@@ -28,11 +28,16 @@ test: test.o other.o $(LIBRARY)
 repeated: repeated.o $(LIBRARY)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
 
+empty: empty.o $(LIBRARY_MINIMAL)
+	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+
 ssl: ssl.o  $(LIBRARY_MINIMAL)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS} -lssl -lcrypto
 
-empty: empty.o $(LIBRARY_MINIMAL)
-	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+
+img: img.o  $(LIBRARY_MINIMAL)
+	$(CXX) $(LDFLAGS) $^ -o $@ ${LIBS} -ljpeg
+
 
 $(LIBRARY) $(LIBRARY_MINIMAL): always
 	$(MAKE) -C $(LIBRARY_DIR)
