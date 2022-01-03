@@ -61,14 +61,15 @@ static tree build_info_fn_type()
 static tree build_info_fn(tree type, cgraph_node *node,
                           std::set<std::string> callees) {
     // FIXME: Sometimes this is NULL, ignore these functions for now
-    if (!node->get_fun())
-        return NULL_TREE;
 
     std::string fname = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node->decl));
 
-    // FIXME: The name contains "*" somehow. This was discovered compiling glibc
-    if (fname.find("*") != std::string::npos)
-        return NULL_TREE;
+    // Remove leading "*"
+    if (fname.rfind("*", 0) == 0)
+        fname = fname.substr(1, std::string::npos);
+
+    int definition = (!!node->definition) << 0;
+    int address_taken = (!!node->address_taken) << 1;
 
     tree ptrtype = build_pointer_type(void_type_node);
 
@@ -80,8 +81,6 @@ static tree build_info_fn(tree type, cgraph_node *node,
     info_fields = DECL_CHAIN(info_fields);
 
     // flags as int
-    int definition = (!!node->definition) << 0;
-    int address_taken = (!!node->address_taken) << 1;
     int flags = definition | address_taken;
     CONSTRUCTOR_APPEND_ELT(obj, info_fields,
                            build_int_cst(TREE_TYPE(info_fields), flags));
@@ -174,6 +173,7 @@ static bool is_builtin_node(cgraph_node *node) {
 static void collect_info_rec(std::set<std::string> *callees, cgraph_node *node) {
     for (cgraph_edge *edge = node->callees; edge; edge = edge->next_callee) {
         std::string cfname = IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(edge->callee->decl));
+        // FIXME cfname may have a leading "*"
 
         // Recursively add the inlined function's callees
         // but ignore the inlined function istelf.

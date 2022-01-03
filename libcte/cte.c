@@ -181,13 +181,20 @@ static int cte_fns_init(cte_info_fn *info_fns, size_t *info_fns_count) {
 
         if (curr >= stop || curr->vaddr != first->vaddr) {
             // zero out the duplicates and set flags
+            cte_info_fn *selected = first;
             int flags = first->flags;
-            for (cte_info_fn *i = first; i < curr; i++) {
-                if (i->flags & FLAG_DEFINITION)
-                    i->flags |= flags & FLAG_ADDRESS_TAKEN;
-                else
-                    *i = (const cte_info_fn) {};
+            for (cte_info_fn *i = first + 1; i < curr; i++) {
+                if (i->calles_count > 0) {
+                    if (selected->calles_count > 0)
+                        cte_die("Multiple definitions\n");
+                    selected->vaddr = NULL;
+                    selected = i;
+                } else {
+                    i->vaddr = NULL;
+                }
+                flags |= i->flags & FLAG_ADDRESS_TAKEN;
             }
+            selected->flags |= flags & FLAG_ADDRESS_TAKEN;
             first = NULL;
         }
     }
@@ -743,7 +750,7 @@ static int cte_restore(void *addr, void *post_call_addr) {
         goto allowed;
 
     // The function can be inserted if its address is taken
-    if (f->info_fn && (f->info_fn->flags | FLAG_ADDRESS_TAKEN))
+    if (f->info_fn && (f->info_fn->flags & FLAG_ADDRESS_TAKEN))
         goto allowed;
 
     // Find the caller

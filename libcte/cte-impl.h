@@ -9,7 +9,8 @@
 
 #define CTE_SEALED          __attribute__((section(".cte_sealed")))
 
-struct cte_info_fn {
+
+struct __attribute__((packed)) cte_info_fn {
     void *vaddr;
     int flags;
     int calles_count;
