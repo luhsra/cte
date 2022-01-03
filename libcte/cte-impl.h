@@ -87,6 +87,7 @@ typedef struct cte_stat {
 
 #endif
 
+static const int FLAG_INDIRECTLY_ALLOWED = (1 << 2); // FIXME: Wrong place
 static const int FLAG_ADDRESS_TAKEN = (1 << 1);
 static const int FLAG_DEFINITION = (1 << 0);
 

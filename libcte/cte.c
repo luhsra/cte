@@ -667,10 +667,96 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
 #define cte_debug_restore(addr, post_call_addr, function, caller)
 #endif
 
+typedef enum cte_callsite_type {
+    CALLSITE_TYPE_DIRECT,
+    CALLSITE_TYPE_INDIRECT,
+    CALLSITE_TYPE_DIRECT_OR_INDIRECT,
+    CALLSITE_TYPE_INVALID,
+} cte_callsite_type;
+
+CTE_ESSENTIAL
+static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
+
+    // Decode the instruction callsite.
+    // We only have the post-call address (aka return address).
+    // Since x86 has variable instruction lengths,
+    // we sometimes cannot say exactly what the previous instrucion is.
+
+    unsigned char *b = post_call_addr;
+    bool indirect = false;
+    bool direct = false;
+
+#define EXT_MOD(ob) ((ob >> 6) & 0x03)
+#define EXT_REG(ob) ((ob >> 3) & 0x07)
+#define EXT_RM(ob) (ob & 0x07)
+
+    if (b[-2] == 0xff && EXT_REG(b[-1]) == 2 &&
+        ((EXT_MOD(b[-1]) == 3) ||
+         (EXT_MOD(b[-1]) == 0 && EXT_RM(b[-1]) != 4))) {
+        indirect = true;
+    }
+    if (b[-3] == 0xff && EXT_REG(b[-2]) == 2 &&
+        ((EXT_MOD(b[-2]) == 0 && EXT_RM(b[-2]) == 4) ||
+         (EXT_MOD(b[-2]) == 1 && EXT_RM(b[-2]) != 4))) {
+        indirect = true;
+    }
+    if (b[-4] == 0xff && EXT_REG(b[-3]) == 2 &&
+        (EXT_MOD(b[-3]) == 1 && EXT_RM(b[-3]) == 4)) {
+        indirect = true;
+    }
+    if (b[-6] == 0xff && EXT_REG(b[-5]) == 2 &&
+        ((EXT_MOD(b[-5]) == 0 && EXT_RM(b[-5]) == 4) ||
+         (EXT_MOD(b[-5]) == 2 && EXT_RM(b[-5]) != 4))) {
+        indirect = true;
+    }
+    if (b[-7] == 0xff && EXT_REG(b[-6]) == 2 &&
+        (EXT_MOD(b[-6]) == 2 && EXT_RM(b[-6]) == 4)) {
+        indirect = true;
+    }
+    // GCC does not use far indirect calls (EXT_MOD=3)
+
+    // direct call
+    if (b[-5] == 0xe8)
+        direct = true;
+    // GCC does not use the callf instruction (Opcode 0x9a)
+
+    if (indirect && direct)
+        return CALLSITE_TYPE_DIRECT_OR_INDIRECT;
+    if (indirect)
+        return CALLSITE_TYPE_INDIRECT;
+    if (direct)
+        return CALLSITE_TYPE_DIRECT;
+    return CALLSITE_TYPE_INVALID;
+
+#undef EXT_REG
+#undef EXT_MOD
+#undef EXT_RM
+}
+
+CTE_ESSENTIAL
+static void cte_indirectly_allow(cte_function *function) {
+    if (!function || !function->info_fn)
+        return;
+    if (function->info_fn->flags & FLAG_INDIRECTLY_ALLOWED)
+        return;
+
+    function->info_fn->flags |= FLAG_INDIRECTLY_ALLOWED;
+
+    for (int i = 0; i < function->info_fn->calles_count; i++) {
+        void *callee = function->info_fn->callees[i];
+        cte_function *cf = bsearch(callee, functions.front, functions.length,
+                                   sizeof(cte_function),
+                                   cte_find_compare_function);
+        cte_indirectly_allow(cf);
+    }
+}
+
 CTE_ESSENTIAL
 static bool cte_check_call(void* called_addr, cte_function *caller, int depth) {
-    if (!caller->info_fn)
+    if (!caller->info_fn) {
+        /* cte_printf("CALLER NO INFO_FN: %s\n", caller->name); */
         return true;
+    }
 
     // A caller function was found, and it has a info_fn
     // Let's see if we are allowed to call function f
@@ -746,12 +832,41 @@ static int cte_restore(void *addr, void *post_call_addr) {
         cte_die("Bsearch yielded a different result...\n");
     */
 
+    cte_callsite_type type = cte_decode_callsite(post_call_addr);
+
+    if (type == CALLSITE_TYPE_INVALID) {
+        cte_printf("Invalid Callsite: ");
+        unsigned char *s = post_call_addr;
+        for (unsigned char *b = s - 16; b < s; b++)
+            cte_printf("%x ", *b);
+        cte_printf("\n");
+        cte_function *cf = bsearch(post_call_addr, functions.front, functions.length,
+                                   sizeof(cte_function), cte_find_compare_in_function);
+        cte_debug_restore(addr, post_call_addr, f, cf);
+        cte_printf("\n");
+        /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
+    }
+
     if (!strict_callgraph)
         goto allowed;
 
-    // The function can be inserted if its address is taken
-    if (f->info_fn && (f->info_fn->flags & FLAG_ADDRESS_TAKEN))
-        goto allowed;
+    if (type != CALLSITE_TYPE_DIRECT) {  // TODO: get rid of invalid callsites
+        // The function can be inserted if its address is taken
+        if (f->info_fn && (f->info_fn->flags & FLAG_ADDRESS_TAKEN)) {
+
+            // This is most likely an indirect call.
+            // Mark all callees as indirectly allowed.
+            cte_indirectly_allow(f);
+
+            goto allowed;
+        }
+
+        // Maybe the callee has been indirectly allowed.
+        if (f->info_fn && (f->info_fn->flags & FLAG_INDIRECTLY_ALLOWED)) {
+            cte_printf("Allow indirect callee %s\n", f->name);
+            goto allowed;
+        }
+    }
 
     // Find the caller
     cte_function *cf = bsearch(post_call_addr, functions.front, functions.length,
