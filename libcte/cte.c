@@ -37,28 +37,30 @@ static size_t cte_sealed_sec_size = 0;
 #define FUNC_ID_INVALID (uint32_t)(~0)
 
 #if CONFIG_STAT
-static cte_stat_t cte_stat;
+cte_stat_t cte_stat;
 
 static void cte_stat_init() {
     cte_stat.init_time = 0;
     cte_stat.restore_count = 0;
     cte_stat.restore_times = calloc(functions.length, sizeof(*cte_stat.restore_times));
 }
+
+#define CLOCK_LIBCTE CLOCK_REALTIME
 #endif
 
+#if CONFIG_THRESHOLD
 struct cte_wipestat {
     uint16_t wipe;
     uint16_t restore;
 };
-static __thread struct cte_wipestat *wipestat;
+static __thread struct cte_wipestat *__wipestat;
+#define cte_get_wipestat() (__wipestat)
 
 void cte_enable_threshold() {
-    if (!wipestat)
-        wipestat = calloc(functions.length, sizeof(*wipestat));
+    if (!__wipestat)
+        __wipestat = calloc(functions.length, sizeof(*__wipestat));
 }
-
-
-static void cte_restore_entry(void);
+#endif
 
 struct build_id_note {
     ElfW(Nhdr) nhdr;
@@ -528,12 +530,16 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"}, {0, "start_thread"},
             // mprotect
             {0, "mprotect"}, {0, "pkey_mprotect"}, {0, "__mprotect"},
-            // memcpy
-            {0, "memcpy@GLIBC_2.2.5"}, {0, "__memcpy_avx_unaligned_erms"},
-            // memset
-            {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
+            // // memcpy
+            // {0, "memcpy@GLIBC_2.2.5"}, {0, "__memcpy_avx_unaligned_erms"},
+            // // memset
+            // {1, "__memcmp"}, {1, "__memmove"}, {1, "__memset"}, {1, "__wmemset"}, {1, "__wmemchr"},
             // restore
-            {0, "bsearch"}, {0, "__tls_get_addr"},
+            {0, "bsearch"},
+#if CONFIG_THRESHOLD
+            // threshold wiping
+            {0, "__tls_get_addr"}, {0, "_dl_update_slotinfo"}, {0, "update_get_addr"},
+#endif
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
@@ -575,6 +581,7 @@ static void cte_modify_begin(void *start, size_t size) {
     uint8_t *aligned_start = cte_align_to_page(start);
     size_t len = stop - aligned_start;
     mprotect(aligned_start, len, PROT_READ | PROT_WRITE | PROT_EXEC);
+    // cte_printf("modify_begin: [%p-%p]%p-%p\n", start, stop, aligned_start, aligned_start+len);
 }
 
 CTE_ESSENTIAL
@@ -584,6 +591,7 @@ static void cte_modify_end(void *start, size_t size) {
     size_t len = stop - aligned_start;
     mprotect(aligned_start, len, PROT_READ | PROT_EXEC);
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
+    // cte_printf("modify_end: [%p-%p]%p-%p\n", start, stop, aligned_start, aligned_start+len);
 }
 
 CTE_ESSENTIAL
@@ -599,7 +607,32 @@ static void *cte_decode_plt(void *entry) {
     return (void*)(*got_entry);
 }
 
-#ifdef CONFIG_PRINT
+#pragma GCC push_options
+#pragma GCC optimize ("-fno-tree-loop-distribute-patterns")
+__attribute__((noinline))
+CTE_ESSENTIAL
+static void *cte_memcpy(void *dst, const void *src,size_t n)
+{
+    size_t i;
+
+    for (i=0;i<n;i++)
+        *(char *) dst++ = *(char *) src++;
+    return dst;
+}
+__attribute__((noinline))
+CTE_ESSENTIAL
+static void *cte_memset(void *dst, int pat, size_t n)
+{
+    size_t i;
+
+    for (i=0;i<n;i++)
+        *(char *) dst++ = (char)pat;
+    return dst;
+}
+#pragma GCC pop_options
+
+
+#if CONFIG_DEBUG
 CTE_ESSENTIAL_USED
 static void cte_debug_restore(void *addr, void *post_call_addr,
                               cte_function *function,
@@ -807,11 +840,11 @@ static bool cte_check_call(void* called_addr, cte_function *caller, int depth) {
     return false;
 }
 
-CTE_ESSENTIAL_USED
-static int cte_restore(void *addr, void *post_call_addr) {
+CTE_ESSENTIAL_USED __attribute__((__visibility__("hidden")))
+int cte_restore(void *addr, void *post_call_addr) {
 #if CONFIG_STAT
     struct timespec ts0;
-    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+    if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts0) == -1) cte_die("clock_gettime");
     cte_stat.restore_count += 1;
 #endif
 
@@ -840,9 +873,9 @@ static int cte_restore(void *addr, void *post_call_addr) {
         for (unsigned char *b = s - 16; b < s; b++)
             cte_printf("%x ", *b);
         cte_printf("\n");
-        cte_function *cf = bsearch(post_call_addr, functions.front, functions.length,
-                                   sizeof(cte_function), cte_find_compare_in_function);
-        cte_debug_restore(addr, post_call_addr, f, cf);
+        cte_debug_restore(addr, post_call_addr, f,
+                          bsearch(post_call_addr, functions.front, functions.length,
+                                  sizeof(cte_function), cte_find_compare_in_function));
         cte_printf("\n");
         /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
     }
@@ -886,12 +919,17 @@ static int cte_restore(void *addr, void *post_call_addr) {
     allowed:
     // cte_printf("-> load: %s\n", f->name);
     // Load the called function
+
     cte_modify_begin(addr, f->size);
-    memcpy(addr, f->body, f->size);
+    cte_memcpy(addr, f->body, f->size);
     cte_modify_end(addr, f->size);
 #if CONFIG_STAT
     cte_stat.cur_wipe_count -= 1;
     cte_stat.cur_wipe_bytes -= f->size;
+#endif
+
+#if CONFIG_THRESHOLD
+    struct cte_wipestat *wipestat = cte_get_wipestat();
 #endif
 
     // Load the sibling
@@ -900,101 +938,33 @@ static int cte_restore(void *addr, void *post_call_addr) {
         if (!cte_func_loaded(func_sibling)) {
             // cte_printf("-> load sibling: %s\n", func_sibling->name);
             cte_modify_begin(func_sibling->vaddr, func_sibling->size);
-            memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
+            cte_memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
             cte_modify_end(func_sibling->vaddr, func_sibling->size);
 
 #if CONFIG_STAT
             cte_stat.cur_wipe_count -= 1;
             cte_stat.cur_wipe_bytes -= func_sibling->size;
 #endif
+#if CONFIG_THRESHOLD
             if (wipestat) wipestat[func_id(func_sibling)].restore++;
+#endif
 
         }
     }
-
+#if CONFIG_THRESHOLD
     if (wipestat) wipestat[func_id(f)].restore ++;
-
+#endif
 
 #if CONFIG_STAT
     struct timespec ts;
-    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts) == -1) cte_die("clock_gettime");
+    if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts) == -1) cte_die("clock_gettime");
 
     uint64_t restore_time = timespec_diff_ns(ts0, ts);
     cte_stat.restore_time += restore_time;
     cte_stat.restore_times[func_id(f)] = timespec_diff_ns(cte_stat.last_wipe_timestamp, ts);
-     // cte_printf("%d ns\n", timespec_diff_ns(ts0, ts));
 #endif
 
     return 0;
-}
-
-CTE_ESSENTIAL_NAKED
-static void cte_restore_entry(void) {
-    asm("pushq %rdi\n"
-        "pushq %rsi\n"
-
-        // rdi (first argument) is the current return pointer of this function
-        "movq 16(%rsp), %rdi\n"
-        // rsi (second argument) is the address of the next instruction
-        // (after the call) in the caller
-        "movq 24(%rsp), %rsi\n"
-
-        // Modify the return ptr: Return to the original function start addr
-        "leaq -12(%rdi), %rdi\n"
-        "movq %rdi, 16(%rsp)\n"
-
-        // Save the caller-saved registers
-        // rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11
-        "pushq %rax\n"
-        "pushq %rdx\n"
-        "pushq %rcx\n"
-        "pushq %r8\n"
-        "pushq %r9\n"
-        "pushq %r10\n"
-        "pushq %r11\n"
-
-        // The stack must be 16-byte aligned before the call
-        "leaq -8(%rsp), %rsp\n"
-
-        // Save the %xmm0-%xmm7 -- they are used for fp arguments
-        /* "subq $128, %rsp\n" */
-        "leaq -128(%rsp), %rsp\n"
-        "movdqu %xmm0, 112(%rsp)\n"
-        "movdqu %xmm1, 96(%rsp)\n"
-        "movdqu %xmm2, 80(%rsp)\n"
-        "movdqu %xmm3, 64(%rsp)\n"
-        "movdqu %xmm4, 48(%rsp)\n"
-        "movdqu %xmm5, 32(%rsp)\n"
-        "movdqu %xmm6, 16(%rsp)\n"
-        "movdqu %xmm7, (%rsp)\n"
-
-        "call cte_restore\n"
-
-        // Restore %xmm0-%xmm7
-        "movdqu 112(%rsp), %xmm0\n"
-        "movdqu 96(%rsp), %xmm1\n"
-        "movdqu 80(%rsp), %xmm2\n"
-        "movdqu 64(%rsp), %xmm3\n"
-        "movdqu 48(%rsp), %xmm4\n"
-        "movdqu 32(%rsp), %xmm5\n"
-        "movdqu 16(%rsp), %xmm6\n"
-        "movdqu (%rsp), %xmm7\n"
-        "leaq 128(%rsp), %rsp\n"
-
-        "leaq 8(%rsp), %rsp\n"
-
-        // Restore the caller-saved registers
-        "popq %r11\n"
-        "popq %r10\n"
-        "popq %r9\n"
-        "popq %r8\n"
-        "popq %rcx\n"
-        "popq %rdx\n"
-        "popq %rax\n"
-        "popq %rsi\n"
-        "popq %rdi\n"
-
-        "ret\n");
 }
 
 
@@ -1014,7 +984,7 @@ static int cte_wipe_fn(cte_function *fn) {
     cte_implant_init(implant, func_id(fn));
 
     // Wipe the rest of the function body
-    memset(fn->vaddr + sizeof(cte_implant),
+    cte_memset(fn->vaddr + sizeof(cte_implant),
            0xcc, // int3 int3 int3...
            fn->size  - sizeof(cte_implant));
 
@@ -1024,7 +994,7 @@ static int cte_wipe_fn(cte_function *fn) {
 int cte_init(int flags) {
 #if CONFIG_STAT
     struct timespec ts0;
-    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+    if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts0) == -1) cte_die("clock_gettime");
 
     cte_stat.text_bytes     = 0;
     cte_stat.function_bytes = 0;
@@ -1149,7 +1119,7 @@ int cte_init(int flags) {
 
 #if CONFIG_STAT
     struct timespec ts1;
-    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts1) == -1) cte_die("clock_gettime");
+    if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts1) == -1) cte_die("clock_gettime");
 
     cte_stat.init_time = timespec_diff_ns(ts0, ts1);
     printf("init time: %.2f ms\n", cte_stat.init_time / (double)1e6);
@@ -1171,9 +1141,15 @@ int cte_mmview_unshare(void) {
 
 CTE_ESSENTIAL
 int cte_wipe_threshold(int threshold, int min_wipe) {
+    (void) threshold; (void) min_wipe;
 #if CONFIG_STAT
+    //if (cte_stat.wipe_count) {
+    //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));
+    //}
+    cte_stat.wipe_count ++;
+
     struct timespec ts0;
-    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts0) == -1) cte_die("clock_gettime");
+    if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts0) == -1) cte_die("clock_gettime");
 #endif
 
     cte_text *text = texts.front;
@@ -1189,9 +1165,16 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
 
     int wipe_count = 0;
     int wipe_bytes = 0;
+
+#if CONFIG_THRESHOLD
+    // Copy Thread local pointer
+    struct cte_wipestat *wipestat = cte_get_wipestat();
+#endif
+    
     for (cte_function *f = fs; f < fs + functions.length; f++) {
         if (!f->body) continue; // Aliases
 
+#if CONFIG_THRESHOLD
         // WIPESTAT: If a function reaches a given threshold, it is no
         // longer wiped, as we assume it is loaded every time
         if (wipestat && threshold > 0 && wipestat[func_id(f)].wipe > min_wipe) {
@@ -1203,6 +1186,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
                 continue;
             }
         }
+#endif
 
         if (!f->essential && f != cf) {
             if (cte_func_loaded(f)) {
@@ -1216,6 +1200,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
                 wipe_bytes += f->size;
             }
             // WIPESTAT: Limit wipe statistics and Increment wipe counters
+#if CONFIG_THRESHOLD
             if (wipestat) {
                 if (wipestat[func_id(f)].wipe > 50000) {
                     wipestat[func_id(f)].wipe    /= 2;
@@ -1223,6 +1208,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
                 }
                 wipestat[func_id(f)].wipe++;
             }
+#endif
         }
     }
 
@@ -1231,7 +1217,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
 
 #if CONFIG_STAT
     struct timespec ts1;
-    if (syscall(SYS_clock_gettime, CLOCK_REALTIME, &ts1) == -1) cte_die("clock_gettime");
+    if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts1) == -1) cte_die("clock_gettime");
 
     cte_stat.last_wipe_time  = timespec_diff_ns(ts0, ts1);
     cte_stat.last_wipe_count = wipe_count;
@@ -1242,9 +1228,8 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
     cte_stat.cur_wipe_count = wipe_count;
     cte_stat.cur_wipe_bytes = wipe_bytes;
 
-    // cte_printf("wipe time: %d ms\n", (uint32_t) (cte_stat.last_wipe_time/1e6));
+    // cte_fdprintf(1, "wipe time: %d us\n", (uint32_t) (cte_stat.last_wipe_time/1e3));
 #endif
-
     return wipe_count;
 }
 
