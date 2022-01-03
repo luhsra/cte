@@ -934,7 +934,7 @@ int cte_init(int flags) {
     }
     bodies = mmap(NULL, bodies_size, PROT_READ | PROT_WRITE,
                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if(!bodies) {
+    if(bodies == MAP_FAILED) {
         cte_die("mmap failed");
     }
     void *ptr = bodies;

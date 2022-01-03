@@ -1,4 +1,4 @@
-#include "syscall.h"
+#include <unistd.h>
 
 #ifdef __cplusplus
 extern "C" {
