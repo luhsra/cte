@@ -28,6 +28,7 @@ int cte_wipe_threshold(int threshold, int min_wipe);
 
 #define CTE_DUMP_TEXTS (1 << 0)
 #define CTE_DUMP_FUNCS (1 << 1)
+#define CTE_DUMP_FUNCS_LOADABLE (1 << 2)  // only together with CTE_DUMP_FUNCS
 
 void cte_dump_state(int fd, unsigned flags);
 

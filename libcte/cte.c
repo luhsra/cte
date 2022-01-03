@@ -1122,6 +1122,7 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
     cte_stat.last_wipe_count = wipe_count;
     cte_stat.last_wipe_bytes = wipe_bytes;
     cte_stat.last_wipe_timestamp = ts1;
+    cte_stat.last_wipe_function = cf;
 
     cte_stat.cur_wipe_count = wipe_count;
     cte_stat.cur_wipe_bytes = wipe_bytes;
@@ -1131,6 +1132,31 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
 
     return wipe_count;
 }
+
+#ifdef CONFIG_STAT
+CTE_ESSENTIAL
+static void cte_mark_loadable(bool *loadables, cte_function *function) {
+    uint32_t idx = func_id(function);
+    if (loadables[idx])
+        return;
+
+    loadables[idx] = true;
+    loadables[function->sibling_idx] = true;
+
+    if (!function->info_fn)
+        function = cte_vector_get(&functions, function->sibling_idx);
+    if (!function->info_fn)
+        return;
+
+    for (int i = 0; i < function->info_fn->calles_count; i++) {
+        void *callee = function->info_fn->callees[i];
+        cte_function *cf = bsearch(callee, functions.front, functions.length,
+                                   sizeof(cte_function),
+                                   cte_find_compare_function);
+        cte_mark_loadable(loadables, cf);
+    }
+}
+#endif
 
 void cte_dump_state(int fd, unsigned flags) {
     
@@ -1143,6 +1169,7 @@ void cte_dump_state(int fd, unsigned flags) {
     cte_fdprintf(fd, "  \"last_wipe_time\": 0x%08x%08x,\n", HEX32(cte_stat.last_wipe_time));
     cte_fdprintf(fd, "  \"last_wipe_count\": %d,\n", cte_stat.last_wipe_count);
     cte_fdprintf(fd, "  \"last_wipe_bytes\": %d,\n", cte_stat.last_wipe_bytes);
+    cte_fdprintf(fd, "  \"last_wipe_function\": \"%s\",\n", cte_stat.last_wipe_function->name);
     cte_fdprintf(fd, "  \"cur_wipe_count\": %d,\n", cte_stat.cur_wipe_count);
     cte_fdprintf(fd, "  \"cur_wipe_bytes\": %d,\n", cte_stat.cur_wipe_bytes);
     cte_fdprintf(fd, "  \"function_count\": %d,\n", functions.length);
@@ -1161,6 +1188,42 @@ void cte_dump_state(int fd, unsigned flags) {
     }
 
     if (flags & CTE_DUMP_FUNCS) {
+        bool *loadables = NULL;
+#ifdef CONFIG_STAT
+        if (flags & CTE_DUMP_FUNCS_LOADABLE) {
+            loadables = mmap(NULL, functions.length, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if(loadables == MAP_FAILED) {
+                cte_die("mmap failed");
+            }
+
+            int xno = 0;
+            int xyes = 0;
+            int sibl = 0;
+            for (uint32_t i = 0; i < functions.length; i++) {
+                cte_function *f = cte_vector_get(&functions, i);
+                cte_function *sibling = (f->sibling_idx != FUNC_ID_INVALID)
+                    ? (cte_vector_get(&functions, f->sibling_idx)) : NULL;
+                if (f->text_idx == 6) {
+                    /* cte_text *t = cte_vector_get(&texts, f->text_idx); */
+                    /* cte_printf("INFO FN: %d  %s :: %s\n", (!!f->info_fn), t->filename, f->name); */
+                    if (f->info_fn)
+                        xyes++;
+                    else
+                        xno++;
+                    if (f->sibling_idx != FUNC_ID_INVALID)
+                        sibl++;
+                }
+                loadables[i] = !(f->info_fn || (sibling && sibling->info_fn));
+                /* if (f->info_fn) { */
+                /*     loadables[i] ||= f->info_fn->flags | FLAG_ADDRESS_TAKEN; */
+                /* } */
+            }
+            cte_printf(" INFO FN yes: %d, no: %d, siblings: %d\n", xyes, xno, sibl);
+            /* cte_mark_loadable(loadables, cte_stat.last_wipe_function); */
+        }
+#endif
+
         cte_function *func;
 
         cte_fdprintf(fd, "  \"functions\": [\n");
@@ -1170,11 +1233,12 @@ void cte_dump_state(int fd, unsigned flags) {
             bool loaded = cte_func_loaded(func);
             cte_text *text = cte_vector_get(&texts, func->text_idx);
 
-            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, 0x%08x%08x],\n",
+            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, %s, 0x%08x%08x],\n",
                          func->text_idx, func->name, func->size,
                          func->vaddr - text->vaddr + text->offset,
                          loaded ? "True": "False",
                          func->essential ? "True": "False",
+                         (loadables && loadables[func_id(func)]) ? "True" : "False",
 #if CONFIG_STAT
                          HEX32(cte_stat.restore_times[func_id(func)])
 #else
@@ -1183,6 +1247,10 @@ void cte_dump_state(int fd, unsigned flags) {
                 );
         }
         cte_fdprintf(fd, "  ],\n");
+
+        if (loadables) {
+            munmap(loadables, functions.length);
+        }
     }
 
     cte_fdprintf(fd, "}\n\1");
