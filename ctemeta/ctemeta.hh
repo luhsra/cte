@@ -96,4 +96,7 @@ struct Cte {
     Function *containing_function(addr_t addr);
     Section *containing_section(addr_t addr);
     bool in_text_segment(addr_t addr);
+
+    void propagate_callees();
+    void propagate_callees_function(Function &fn);
 };

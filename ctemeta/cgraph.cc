@@ -195,3 +195,27 @@ void Cte::analyze() {
         analyze_function(it->second);
     }
 }
+
+void Cte::propagate_callees() {
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        propagate_callees_function(fn);
+    }
+}
+
+void Cte::propagate_callees_function(Function &fn) {
+    if (fn.jumpees.empty())
+        return;
+
+    std::vector<addr_t> jumpees(fn.jumpees.begin(), fn.jumpees.end());
+    fn.jumpees.clear();
+
+    for (addr_t addr : jumpees) {
+        auto &jumpee = functions.at(addr);
+        propagate_callees_function(jumpee);
+
+        for (addr_t addr : jumpee.callees) {
+            fn.callees.insert(addr);
+        }
+    }
+}
