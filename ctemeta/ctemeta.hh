@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <ostream>
 
 typedef uint64_t addr_t;
 
@@ -18,6 +19,7 @@ struct Function {
     bool definition;
     bool address_taken;
     bool has_indirect_calls;
+    bool visited; // Auxiliary flag for propagate functions
     std::set<addr_t> siblings;
     std::set<addr_t> callees;
     std::set<addr_t> jumpees;
@@ -25,13 +27,13 @@ struct Function {
 
     Function()
         : name(""), idx(0), vaddr(0), size(0), section(0), definition(false),
-          address_taken(false), has_indirect_calls(false) {}
+          address_taken(false), has_indirect_calls(false), visited(0) {}
 
     Function(std::string name, uint64_t idx, addr_t vaddr, addr_t size,
              bool definition)
         : name(name), idx(idx), vaddr(vaddr), size(size), section(0),
           definition(definition), address_taken(false),
-          has_indirect_calls(false) {}
+          has_indirect_calls(false), visited(0) {}
 
     bool merge(Function &other);
 
@@ -97,6 +99,13 @@ struct Cte {
     Section *containing_section(addr_t addr);
     bool in_text_segment(addr_t addr);
 
-    void propagate_callees();
-    void propagate_callees_function(Function &fn);
+    void propagate();
+    void propagate_jumpees(Function &fn);
+    void propagate_siblings(Function &fn);
+    void clear_visited();
+
+    std::vector<uint8_t> dump();
+
+    void print(std::ostream &stream);
+    void print(std::ostream &stream, Function &fn);
 };

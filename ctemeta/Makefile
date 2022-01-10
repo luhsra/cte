@@ -1,7 +1,7 @@
 CXX := g++
 CXXFLAGS += -Wall -Wextra -O2
-SOURCES = ctemeta.cc elf.cc code.cc cgraph.cc util.cc
-HEADERS = ctemeta.hh util.hh
+SOURCES = ctemeta.cc elf.cc code.cc cgraph.cc util.cc dump.cc
+HEADERS = ctemeta.hh util.hh ../common/meta.h
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCTS = ctemeta
 

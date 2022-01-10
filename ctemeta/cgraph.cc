@@ -18,7 +18,7 @@ bool Function::merge(Function &other) {
 
 std::string Function::str() {
     std::stringstream s;
-    s << name << "[";
+    s << name << " [";
     s << "0x" << std::hex << vaddr;
     s << "/+0x" << std::hex << size;
     s << "]";
@@ -196,25 +196,62 @@ void Cte::analyze() {
     }
 }
 
-void Cte::propagate_callees() {
+void Cte::clear_visited() {
     for (auto &item : functions) {
         auto &fn = item.second;
-        propagate_callees_function(fn);
+        fn.visited = false;
     }
 }
 
-void Cte::propagate_callees_function(Function &fn) {
-    if (fn.jumpees.empty())
+void Cte::propagate() {
+    clear_visited();
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        propagate_jumpees(fn);
+    }
+
+    clear_visited();
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        propagate_siblings(fn);
+    }
+
+    clear_visited();
+}
+
+void Cte::propagate_jumpees(Function &fn) {
+    if (fn.visited)
         return;
+    fn.visited = true;
 
     std::vector<addr_t> jumpees(fn.jumpees.begin(), fn.jumpees.end());
     fn.jumpees.clear();
 
     for (addr_t addr : jumpees) {
+        fn.callees.insert(addr);
+
         auto &jumpee = functions.at(addr);
-        propagate_callees_function(jumpee);
+        propagate_jumpees(jumpee);
 
         for (addr_t addr : jumpee.callees) {
+            fn.callees.insert(addr);
+        }
+    }
+}
+
+void Cte::propagate_siblings(Function &fn) {
+    if (fn.visited)
+        return;
+    fn.visited = true;
+
+    for (addr_t addr : fn.siblings) {
+        auto &sibling = functions.at(addr);
+        propagate_siblings(sibling);
+
+        for (addr_t addr : sibling.siblings) {
+            fn.siblings.insert(addr);
+        }
+        for (addr_t addr : sibling.callees) {
             fn.callees.insert(addr);
         }
     }
