@@ -7,6 +7,7 @@ static const uint32_t CTE_VERSION = 1;
 
 static const uint32_t FLAG_DEFINITION = (1 << 0);
 static const uint32_t FLAG_ADDRESS_TAKEN = (1 << 1);
+static const uint32_t FLAG_INDIRECT_CALLS = (1 << 2);
 
 typedef struct cte_meta_function {
     void *vaddr;

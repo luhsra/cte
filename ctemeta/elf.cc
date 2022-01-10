@@ -37,7 +37,7 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                          name.c_str());
 
                 if (sym.st_size == 0) {
-                    warn("ELF: Ignore zero-sized symbol: %s (%lx)\n",
+                    warn("ELF: Ignore zero-sized symbol: %s (0x%lx)\n",
                          name.c_str(), sym.st_value);
                     continue;
                 }
