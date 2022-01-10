@@ -3,3 +3,6 @@ compile_commands.json
 *.o
 *.so
 *.a
+/ctemeta/zydis
+/ctemeta/zydis-dist
+/ctemeta/ctemeta

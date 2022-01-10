@@ -1,0 +1,5 @@
+[external "ctemeta/zydis"]
+	path = ctemeta/zydis
+	url = https://github.com/zyantific/zydis.git
+	branch = master
+	vcs = git
