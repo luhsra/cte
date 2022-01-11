@@ -13,6 +13,7 @@ static void error_libelf(void) {
 
 static std::map<addr_t, Function>
 scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
+    bool symtab_found = false;
     std::map<addr_t, Function> map;
     Elf_Scn* scn = NULL;
     while ((scn = elf_nextscn(elf, scn)) != NULL) {
@@ -20,7 +21,14 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
         if (gelf_getshdr(scn, &shdr) != &shdr)
             error(Error::ELF, "ELF: Invalid section\n");
 
+        if (shdr.sh_type == SHT_SYMTAB)
+            symtab_found = true;
+
+        // I think, DYNSYM is a subset of SYMTAB in most cases..
+        // However, we'll look at both for now and discard duplicates.
+        // (SYMTAB can be stripped, but CTE requires it)
         if (shdr.sh_type == SHT_SYMTAB || shdr.sh_type == SHT_DYNSYM) {
+            // uint64_t symtab = elf_scnshndx(scn);
             Elf_Data *data = elf_getdata(scn, NULL);
             int count = shdr.sh_size / shdr.sh_entsize;
             for (int i = 0; i < count; ++i) {
@@ -36,16 +44,9 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                     warn("ELF: Found non function symbol in text: %s\n",
                          name.c_str());
 
-                if (sym.st_size == 0) {
-                    warn("ELF: Ignore zero-sized symbol: %s (0x%lx)\n",
-                         name.c_str(), sym.st_value);
-                    continue;
-                }
-
                 addr_t vaddr = sym.st_value;
                 addr_t size = sym.st_size;
-                uint64_t idx = i;
-                Function f { name, idx, vaddr, size, true };
+                Function f { name, vaddr, size, true };
                 if (map.count(vaddr) == 0) {
                     map[vaddr] = f;
                 } else {
@@ -57,6 +58,10 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
             }
         }
     }
+
+    if (!symtab_found)
+        error(Error::ELF, "Symbol table not found");
+
     return map;
 }
 
@@ -110,7 +115,19 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
                           fn.str().c_str());
                 fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
                 fn.section = vaddr;
+                fn.definition = !is_plt;
             }
+        }
+    }
+
+    // Finally, scan all functions and warn about zero-sized functions
+    // TODO: We could extend the functions to the next function start.
+    //       Maybe, with some sanity-checks (size, ...)
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        if (fn.size == 0 && fn.definition) {
+            warn("ELF: Zero-sized symbol: %s (0x%lx)\n",
+                 fn.name.c_str(), fn.vaddr);
         }
     }
 
@@ -177,7 +194,6 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                 addr_t value;
                 bool plt = (rel_type == R_X86_64_JUMP_SLOT);
                 bool got = (rel_type == R_X86_64_GLOB_DAT);
-                bool symbol_undef = false;
                 uint64_t symbol_idx = GELF_R_SYM(rel.r_info);
 
                 // Ignore relocations in cte sections
@@ -212,9 +228,24 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                         continue;
                     }
 
+                    // Name of the symbol
+                    GElf_Shdr symtab_shdr;
+                    gelf_getshdr(symtab_scn, &symtab_shdr);
+                    char *name = elf_strptr(elf, symtab_shdr.sh_link, sym.st_name);
+
                     if (sym.st_shndx == SHN_UNDEF) {
                         // This symbol is located in another object
-                        symbol_undef = true;
+
+                        // This is a direct reference (no plt incirection) to a
+                        // function in another ELF object.
+                        // FIXME: Handling this would require rearranging some
+                        //        data structures
+                        if (rel_type == R_X86_64_64)
+                            error(Error::ELF,
+                                  "Direct reference to an undefined function: %s\n",
+                                  name);
+
+                        continue;
                     }
 
                     value = sym.st_value + rel.r_addend;
@@ -234,15 +265,14 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                     continue;
                 }
 
-                // Symbol is defined here and does not target this executable segment
-                if (!symbol_undef && !(value >= text_start && value < text_end))
+                if (!(value >= text_start && value < text_end)) {
+                    // Relocation does not target the executable segment.
                     continue;
+                }
 
-                // printf("%lx -> %d: [%lu] 0x%lx /{%d}\n",
-                //        offset, i, rel_type, value, symbol_undef);
+                // printf("%lx -> %d: [%lu] 0x%lx\n", offset, i, rel_type, value);
 
-                vec.push_back({ offset, value, plt, got,
-                                symbol_undef, symbol_idx });
+                vec.push_back({ offset, value, plt, got });
             }
         }
     }
