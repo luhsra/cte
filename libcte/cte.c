@@ -1333,7 +1333,7 @@ void cte_dump_state(int fd, unsigned flags) {
             bool loaded = cte_func_loaded(func);
             cte_text *text = cte_vector_get(&texts, func->text_idx);
 
-            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, %s, 0x%08x%08x],\n",
+            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, 0x%08x%08x, %s],\n",
                          func->text_idx, func->name, func->size,
                          func->vaddr - text->vaddr + text->offset,
                          loaded ? "True": "False",
