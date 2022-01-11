@@ -12,28 +12,27 @@ typedef uint64_t addr_t;
 
 struct Function {
     std::string name;
-    uint64_t idx; // ELF symtab index of the symbol (0 if none)
     addr_t vaddr;
     addr_t size;
     addr_t section;
-    bool definition;
+    bool definition; // Currently, this is ->section.is_plt (if section != 0)
     bool address_taken;
     bool has_indirect_calls;
-    bool visited; // Auxiliary flag for propagate functions
+    bool visited;    // Auxiliary flag for propagate functions
+
     std::set<addr_t> siblings;
     std::set<addr_t> callees;
     std::set<addr_t> jumpees;
-    std::vector<uint8_t> code; // extends to next function start (>= size)
+    std::vector<uint8_t> code; // Extends to next function start (>= size)
 
     Function()
-        : name(""), idx(0), vaddr(0), size(0), section(0), definition(false),
-          address_taken(false), has_indirect_calls(false), visited(0) {}
+        : name(""), vaddr(0), size(0), section(0), definition(false),
+          address_taken(false), has_indirect_calls(false), visited(false) {}
 
-    Function(std::string name, uint64_t idx, addr_t vaddr, addr_t size,
-             bool definition)
-        : name(name), idx(idx), vaddr(vaddr), size(size), section(0),
+    Function(std::string name, addr_t vaddr, addr_t size, bool definition)
+        : name(name), vaddr(vaddr), size(size), section(0),
           definition(definition), address_taken(false),
-          has_indirect_calls(false), visited(0) {}
+          has_indirect_calls(false), visited(false) {}
 
     bool merge(Function &other);
 
@@ -58,17 +57,12 @@ struct Relocation {
     addr_t value;        // what does the relocation refer to (vaddr)
     bool plt;            // relocation inside a PLT
     bool got;            // relocation inside a GOT
-    bool symbol_undef;   // target symbol refers to another ELF
-    uint64_t symbol_idx; // ELF symtab index of the target symbol (0 if none)
 
     Relocation()
-        : offset(0), value(0), plt(false), got(false),
-          symbol_undef(false), symbol_idx(0) {}
+        : offset(0), value(0), plt(false), got(false) {}
 
-    Relocation(addr_t offset, addr_t vaddr, bool plt, bool got,
-               bool symbol_undef, uint64_t symbol_idx)
-        : offset(offset), value(vaddr), plt(plt), got(got),
-          symbol_undef(symbol_undef), symbol_idx(symbol_idx) {}
+    Relocation(addr_t offset, addr_t vaddr, bool plt, bool got)
+        : offset(offset), value(vaddr), plt(plt), got(got) {}
 };
 
 struct Cte {

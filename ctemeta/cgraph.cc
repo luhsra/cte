@@ -50,9 +50,13 @@ bool Cte::in_text_segment(addr_t addr) {
 }
 
 static Function *make_plt_function(Cte *cte, Section *scn, addr_t vaddr) {
-    Function newfn { "<plt entry>", 0, vaddr, 0, false };
-    newfn.section = scn->vaddr;
-    cte->functions[vaddr] = newfn;
+    // There may be already a plt-Function,
+    // because containing_function does not find zero-sized symbols.
+    if (!cte->functions.count(vaddr)) {
+        Function newfn { "<plt entry>", vaddr, 0, false };
+        newfn.section = scn->vaddr;
+        cte->functions[vaddr] = newfn;
+    }
     return &cte->functions[vaddr];
 }
 
@@ -167,24 +171,12 @@ void Cte::analyze() {
     // Relocations
     for (auto it = relocations.begin(); it != relocations.end(); it++) {
         Function *fn;
-        if (it->symbol_undef) {
-            // The target function is not defined in this ELF.
-            if (functions.count(it->value)) {
-                fn = &functions[it->value];
-            } else {
-                Function newfn { "<extern function>", it->symbol_idx,
-                                 it->value, 0, false };
-                functions[it->value] = newfn;
-                fn = &functions[it->value];
-            }
-        } else {
-            if (!functions.count(it->value)) {
-                warn("Missing function symbol at 0x%lx: Relocation at 0x%lx\n",
-                     it->value, it->offset);
-                continue;
-            }
-            fn = &functions[it->value];
+        if (!functions.count(it->value)) {
+            warn("Missing function symbol at 0x%lx: relocation at 0x%lx\n",
+                 it->value, it->offset);
+            continue;
         }
+        fn = &functions[it->value];
 
         if (!it->plt && !it->got)
             fn->address_taken = true;
