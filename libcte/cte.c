@@ -1338,12 +1338,12 @@ void cte_dump_state(int fd, unsigned flags) {
                          func->vaddr - text->vaddr + text->offset,
                          loaded ? "True": "False",
                          func->essential ? "True": "False",
-                         (loadables && loadables[func_id(func)]) ? "True" : "False",
 #if CONFIG_STAT
-                         HEX32(cte_stat.restore_times[func_id(func)])
+                         HEX32(cte_stat.restore_times[func_id(func)]),
 #else
-                         HEX32(-1)
+                         HEX32(-1),
 #endif
+                         (loadables && loadables[func_id(func)]) ? "True" : "False"
                 );
         }
         cte_fdprintf(fd, "  ],\n");
