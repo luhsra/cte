@@ -249,6 +249,7 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                     }
 
                     value = sym.st_value + rel.r_addend;
+
                 } else if (rel_type == R_X86_64_RELATIVE ||
                            rel_type == R_X86_64_IRELATIVE) {
                     if (symbol_idx != 0)
@@ -256,9 +257,26 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                               "idx: %d, type: %lu, sym_idx: %lu, addend: 0x%lx\n",
                               i, rel_type, symbol_idx, rel.r_addend);
                     value = rel.r_addend;
+
+                } else if (rel_type == R_X86_64_COPY) {
+                    if (symbol_idx == 0)
+                        error(Error::ELF, "Unexpected relocation data: "
+                              "idx: %d, type: %lu, sym_idx: 0, addend: 0x%lx\n",
+                              i, rel_type, rel.r_addend);
+                    GElf_Sym sym;
+                    gelf_getsym(symtab_data, symbol_idx, &sym);
+                    if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                        GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
+                        continue;
+                    warn("Unsupported relocation: "
+                         "idx: %d, type: %lu, sym_idx: 0, addend: 0x%lx\n",
+                         i, rel_type, rel.r_addend);
+                    continue;
+
                 } else if (rel_type == R_X86_64_TPOFF64) {
                     debug("Ignore relocation: idx: %d, type: %lu\n", i, rel_type);
                     continue;
+
                 } else {
                     warn("Ignore unsupported relocation: idx: %d, type: %lu\n",
                          i, rel_type);
