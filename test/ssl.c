@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "cte_mprotect.h"
+
 char* pemCertString = "-----BEGIN CERTIFICATE-----\n"
     "MIIGCTCCBPGgAwIBAgISBBWrp8J35VPLEOkvVra2+g0XMA0GCSqGSIb3DQEBCwUA\n"
     "MDIxCzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1MZXQncyBFbmNyeXB0MQswCQYDVQQD\n"
@@ -102,6 +104,14 @@ bool check_cert_wipe(long mmview, bool wipe)  {
     return ret;
 }
 
+__attribute__((weak))
+bool check_cert_mprotect(struct cte_range*range, unsigned ranges)  {
+    cte_range_mprotect(range, ranges, PROT_READ);
+    bool ret = check_cert();
+    cte_range_mprotect(range, ranges, PROT_READ|PROT_EXEC);
+    return ret;
+}
+
 #define SSL_ROUNDS  10000
 
 
@@ -149,10 +159,28 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "ssl,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, SSL_ROUNDS);
     }
 
+    struct cte_range *ranges = malloc(sizeof(struct cte_range) * 10000); 
     fd = open("ssl.migrate.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
     cte_dump_state(fd, 0);
     previous = mmview_migrate(ssl_mmview); 
     cte_dump_state(fd, CTE_DUMP_FUNCS|CTE_DUMP_TEXTS);
+    unsigned range_count = cte_get_wiped_ranges(ranges);
     mmview_migrate(previous);
+    if (mmview_delete(ssl_mmview) == -1) die("mmview_delete");
+
+    unsigned mprotect_count=0, mprotect_bytes=0;
+    cte_range_stat(ranges, range_count, mprotect_count, mprotect_bytes);
+    printf("mprotect Ranges: %d, %d\n", mprotect_count, mprotect_bytes);
+
+    for (unsigned _i = 0; _i < repeat; _i ++) {
+        clock_gettime(CLOCK_REALTIME, &ts0);
+        for (unsigned i = 0; i < SSL_ROUNDS; i++) {
+            check_cert_mprotect(ranges, range_count);
+        }
+        clock_gettime(CLOCK_REALTIME, &ts1);
+        fprintf(stderr, "ssl,mprotect,%f,%d,%d,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, SSL_ROUNDS,
+                mprotect_count, mprotect_bytes);
+    }
+
     close(fd);
 }

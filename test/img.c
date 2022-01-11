@@ -9,6 +9,7 @@
 
 #include <jpeglib.h>
 #include <jerror.h>
+#include "cte_mprotect.h"
 
 struct imgRawImage {
 	unsigned int numComponents;
@@ -93,6 +94,13 @@ struct imgRawImage* loadJpegImageFile_wiped(long mmview, bool wipe, char* lpFile
     int rc = mmview_migrate(previous); (void) rc;
     // printf("%ld -> %ld (%ld)\n",  mmview, rc, previous);
 
+    return ret;
+}
+
+struct imgRawImage* loadJpegImageFile_mprotect(struct cte_range*range, unsigned ranges, char* lpFilename) {
+    cte_range_mprotect(range, ranges, PROT_READ);
+    struct imgRawImage *ret = loadJpegImageFile(lpFilename);
+    cte_range_mprotect(range, ranges, PROT_READ|PROT_EXEC);
     return ret;
 }
 
@@ -245,13 +253,43 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "img,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, IMG_ROUNDS);
     }
 
+    struct cte_range *ranges = malloc(sizeof(struct cte_range) * 10000); 
     fd = open("img.migrate.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
     cte_dump_state(fd, 0);
     previous = mmview_migrate(img_mmview); 
     cte_dump_state(fd, CTE_DUMP_FUNCS|CTE_DUMP_TEXTS);
+    unsigned range_count = cte_get_wiped_ranges(ranges);
     mmview_migrate(previous);
-    close(fd);
+    if (mmview_delete(img_mmview) == -1) die("mmview_delete");
 
+
+    ////////////////////////////////////////////////////////////////
+    // With mprotect
+    unsigned mprotect_count=0, mprotect_bytes=0;
+    cte_range_stat(ranges, range_count, mprotect_count, mprotect_bytes);
+    printf("mprotect Ranges: %d, %d\n", mprotect_count, mprotect_bytes);
+
+
+    for (unsigned _i = 0; _i < repeat; _i ++) {
+        clock_gettime(CLOCK_REALTIME, &ts0);
+        for (unsigned i = 0; i < IMG_ROUNDS; i++) {
+            // Wikimedia Image of the Day: 15th December
+            // Intercession Church on the Nerl in Bogolyubovo near Vladimir, Russia
+            struct imgRawImage *image = loadJpegImageFile_mprotect(ranges, range_count, imageFile);
+
+            struct imgRawImage *grayscale = NULL;
+            filterGrayscale(image, &grayscale);
+
+            storeJpegImageFile(grayscale, "/dev/shm/grayscale.jpg");
+            freeRawImage(grayscale);
+            freeRawImage(image);
+        }
+        clock_gettime(CLOCK_REALTIME, &ts1);
+        fprintf(stderr, "img,mprotect,%f,%d,%d,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, IMG_ROUNDS,
+                mprotect_count, mprotect_bytes);
+    }
+    
+    close(fd);
 
     return 0;
 }

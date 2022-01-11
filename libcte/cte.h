@@ -32,6 +32,12 @@ int cte_wipe_threshold(int threshold, int min_wipe);
 
 void cte_dump_state(int fd, unsigned flags);
 
+struct cte_range {
+    char *address;
+    size_t length;
+};
+unsigned cte_get_wiped_ranges(struct cte_range *ranges);
+
 #ifdef __cplusplus
 }
 #endif

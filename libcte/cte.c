@@ -1359,6 +1359,26 @@ void cte_dump_state(int fd, unsigned flags) {
 
 }
 
+unsigned cte_get_wiped_ranges(struct cte_range *ranges) {
+    struct cte_function *func;
+    unsigned ret = 0;
+    for_each_cte_vector(&functions, func) {
+        if (!func->body) continue;
+        if (!cte_func_loaded(func)) {
+            if (ret > 0 &&
+                func->vaddr == (ranges[ret-1].address + ranges[ret-1].length) ) {
+                ranges[ret-1].length += func->size;
+            } else { // New interval
+                ranges[ret].address = func->vaddr;
+                ranges[ret].length = func->size;
+                ret++;
+            }
+        }
+    }
+    return ret;
+}
+
+
 
 // Require LD_PRELOAD
 void *dlopen(const char *path, int flags) {

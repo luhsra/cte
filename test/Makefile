@@ -16,7 +16,7 @@ LDFLAGS += -L$(LIBRARY_DIR)
 LIBS    += -lelf -ldl
 SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
-PRODUCT = test repeated
+PRODUCT = test repeated empty ssl img
 
 .PHONY: clean always
 
