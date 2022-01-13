@@ -35,6 +35,7 @@ void cte_dump_state(int fd, unsigned flags);
 struct cte_range {
     char *address;
     size_t length;
+    size_t file_offset;
 };
 unsigned cte_get_wiped_ranges(struct cte_range *ranges);
 

@@ -1369,8 +1369,11 @@ unsigned cte_get_wiped_ranges(struct cte_range *ranges) {
                 func->vaddr == (ranges[ret-1].address + ranges[ret-1].length) ) {
                 ranges[ret-1].length += func->size;
             } else { // New interval
+                cte_text *text = cte_vector_get(&texts, func->text_idx);
+
                 ranges[ret].address = func->vaddr;
                 ranges[ret].length = func->size;
+                ranges[ret].file_offset = func->vaddr - text->vaddr + text->offset;
                 ret++;
             }
         }
