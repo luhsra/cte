@@ -16,13 +16,36 @@ enum cte_flags {
     CTE_STRICT_CALLGRAPH = 1,
 };
 
+#define  CTE_NOWIPE 1
+#define  CTE_WIPE   2
+#define  CTE_KILL   3
+#define  CTE_SYSTEM_FORCE  0x40
+#define  CTE_FORCE  0x80
+
+typedef unsigned char cte_wipe_policy;
+typedef struct cte_rules {
+    // Threshold Wiping
+    int threshold;
+    int min_wipe;
+
+    // Length
+    unsigned length;
+    cte_wipe_policy policy[];
+} cte_rules;
+
+cte_rules *cte_rules_init(cte_wipe_policy def);
+void cte_rules_free(cte_rules *);
+unsigned cte_rules_set(cte_rules *,  cte_wipe_policy pol);
+unsigned cte_rules_set_func(cte_rules *, cte_wipe_policy pol,  void *func, char children);
+
+
 int cte_init(int flags);
 
 int cte_mmview_unshare(void);
 
 void cte_enable_threshold();
-int cte_wipe_threshold(int threshold, int min_wipe);
-#define cte_wipe() cte_wipe_threshold(0, 0)
+int cte_wipe_rules(cte_rules *rules);
+static inline int cte_wipe() { return cte_wipe_rules(NULL); }
 
 
 

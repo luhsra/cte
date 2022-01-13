@@ -27,10 +27,14 @@ int main(void) {
         return 2;
     }
 
+    cte_rules *rules = cte_rules_init(CTE_WIPE);
+    rules->threshold = 80;
+    rules->min_wipe = 20;
+
     cte_enable_threshold();
 
     for (unsigned i = 0; i < 50; i++) {
-        int wiped = cte_wipe_threshold(80, 20);
+        int wiped = cte_wipe_rules(rules);
 
         int a;
         a += func1();

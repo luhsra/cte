@@ -10,6 +10,7 @@
 #include <sys/ucontext.h>
 #include <syscall.h>
 #include <link.h>
+#include <assert.h>
 
 #include <fcntl.h>
 #include <link.h>
@@ -307,6 +308,44 @@ cte_elf_scan_symbols(Elf *elf, cte_text * text, ElfW(Addr) dlpi_addr) {
     return ret;
 }
 
+cte_rules *cte_rules_init(cte_wipe_policy def) {
+    cte_rules* ret = malloc(sizeof(cte_rules) + sizeof(cte_wipe_policy) * functions.length);
+    ret->length = functions.length;
+    for (unsigned i = 0; i < functions.length; i++)
+        ret->policy[i] = def;
+    return ret;
+}
+
+void cte_rules_free(cte_rules *rules) {
+    free(rules);
+}
+
+unsigned cte_rules_set(cte_rules *rules, cte_wipe_policy policy) {
+    unsigned ret = 0;
+    for (unsigned i = 0; i < rules->length; i++) {
+        if (!(rules->policy[i] & CTE_SYSTEM_FORCE)) {
+            rules->policy[i] = policy;
+            ret++;
+        }
+    }
+    return ret;
+}
+
+unsigned cte_rules_set_func(cte_rules *rules, cte_wipe_policy policy, void *fptr, char children) {
+    unsigned ret = 0;
+    assert(children == 0 && "Not implemented yet");
+
+    cte_function *func = bsearch(fptr, functions.front, functions.length,
+                                 sizeof(cte_function),
+                                 cte_find_compare_function);
+    if (func) {
+        if (!(rules->policy[func_id(func)] & CTE_FORCE)) {
+            rules->policy[func_id(func)] = policy;
+            ret++;
+        }
+    }
+    return ret;
+}
 
 static
 void cte_handle_build_id(struct dl_phdr_info *info, cte_text *text, int j) {
@@ -868,11 +907,11 @@ int cte_restore(void *addr, void *post_call_addr) {
     cte_callsite_type type = cte_decode_callsite(post_call_addr);
 
     if (type == CALLSITE_TYPE_INVALID) {
-        cte_printf("Invalid Callsite: ");
+        cte_printf("WARNING: Invalid Callsite: ");
         unsigned char *s = post_call_addr;
         for (unsigned char *b = s - 16; b < s; b++)
             cte_printf("%x ", *b);
-        cte_printf("\n");
+        cte_printf(" <RETADDR>\n");
         cte_debug_restore(addr, post_call_addr, f,
                           bsearch(post_call_addr, functions.front, functions.length,
                                   sizeof(cte_function), cte_find_compare_in_function));
@@ -969,8 +1008,9 @@ int cte_restore(void *addr, void *post_call_addr) {
 
 
 CTE_ESSENTIAL
-static int cte_wipe_fn(cte_function *fn) {
+static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     cte_implant *implant = fn->vaddr;
+    if (policy == CTE_NOWIPE) return 0;
 
     if (fn->size < sizeof(cte_implant)) {
         cte_text *text = cte_vector_get(&texts, fn->text_idx);
@@ -980,13 +1020,20 @@ static int cte_wipe_fn(cte_function *fn) {
         return 0;
     }
 
-    // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
-    cte_implant_init(implant, func_id(fn));
+    if (policy == CTE_WIPE) {
+        // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
+        cte_implant_init(implant, func_id(fn));
 
-    // Wipe the rest of the function body
-    cte_memset(fn->vaddr + sizeof(cte_implant),
-           0xcc, // int3 int3 int3...
-           fn->size  - sizeof(cte_implant));
+        // Wipe the rest of the function body
+        cte_memset(fn->vaddr + sizeof(cte_implant),
+                   0xcc, // int3 int3 int3...
+                   fn->size  - sizeof(cte_implant));
+    } else if (policy == CTE_KILL) {
+        // Wipe the whole function body
+        cte_memset(fn->vaddr,
+                   0xcc, // int3 int3 int3...
+                   fn->size);
+    }
 
     return 1;
 }
@@ -1140,8 +1187,7 @@ int cte_mmview_unshare(void) {
 
 
 CTE_ESSENTIAL
-int cte_wipe_threshold(int threshold, int min_wipe) {
-    (void) threshold; (void) min_wipe;
+int cte_wipe_rules(cte_rules *rules) {
 #if CONFIG_STAT
     //if (cte_stat.wipe_count) {
     //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));
@@ -1170,13 +1216,15 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
     // Copy Thread local pointer
     struct cte_wipestat *wipestat = cte_get_wipestat();
 #endif
-    
+
     for (cte_function *f = fs; f < fs + functions.length; f++) {
         if (!f->body) continue; // Aliases
 
 #if CONFIG_THRESHOLD
         // WIPESTAT: If a function reaches a given threshold, it is no
         // longer wiped, as we assume it is loaded every time
+        int threshold = rules ? rules->threshold : 0;
+        int min_wipe = rules ? rules->min_wipe : 0;
         if (wipestat && threshold > 0 && wipestat[func_id(f)].wipe > min_wipe) {
             int percentage =
                 wipestat[func_id(f)].restore * 100
@@ -1187,10 +1235,15 @@ int cte_wipe_threshold(int threshold, int min_wipe) {
             }
         }
 #endif
+        // Fetch the wiping policy
+        cte_wipe_policy policy = CTE_WIPE;
+        if (rules) {
+            policy = rules->policy[func_id(f)] & ~(CTE_FORCE | CTE_SYSTEM_FORCE);
+        }
 
         if (!f->essential && f != cf) {
             if (cte_func_loaded(f)) {
-                if (cte_wipe_fn(f)) { // Wipe Function!
+                if (cte_wipe_fn(f, policy)) { // Wipe Function!
                     wipe_count += 1;
                     wipe_bytes += f->size;
                 }

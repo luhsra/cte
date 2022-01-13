@@ -16,13 +16,16 @@ LDFLAGS += -L$(LIBRARY_DIR)
 LIBS    += -lelf -ldl
 SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
-PRODUCT = test repeated empty ssl img
+PRODUCT = test test-subset repeated empty ssl img
 
 .PHONY: clean always
 
 all: ${PRODUCT}
 
 test: test.o other.o $(LIBRARY)
+	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+
+test-subset: test-subset.o  $(LIBRARY_MINIMAL)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
 
 repeated: repeated.o $(LIBRARY)
