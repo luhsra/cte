@@ -30,8 +30,8 @@ bool check_empty_wipe(long mmview, bool wipe)  {
 
     return ret;
 }
-#define EMPTY_ROUNDS  100000
-//#define EMPTY_ROUNDS  1000
+#define EMPTY_ROUNDS  1000000
+//#define EMPTY_ROUNDS  100
 
 
 
