@@ -234,13 +234,13 @@ int main(int argc, char *argv[]) {
     long previous;
     int fd;
 
-    loadJpegImageFile_wiped(true, img_mmview, argv[1]);
+    loadJpegImageFile_wiped(img_mmview, true, argv[1]);
     for (unsigned _i = 0; _i < repeat; _i ++) {
         clock_gettime(CLOCK_REALTIME, &ts0);
         for (unsigned i = 0; i < IMG_ROUNDS; i++) {
             // Wikimedia Image of the Day: 15th December
             // Intercession Church on the Nerl in Bogolyubovo near Vladimir, Russia
-            struct imgRawImage *image = loadJpegImageFile_wiped(img_mmview, true, imageFile);
+            struct imgRawImage *image = loadJpegImageFile_wiped(img_mmview, false, imageFile);
 
             struct imgRawImage *grayscale = NULL;
             filterGrayscale(image, &grayscale);
