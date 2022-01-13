@@ -738,7 +738,7 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
         indirect = true;
     }
     if (b[-6] == 0xff && EXT_REG(b[-5]) == 2 &&
-        ((EXT_MOD(b[-5]) == 0 && EXT_RM(b[-5]) == 4) ||
+        ((EXT_MOD(b[-5]) == 0 && (EXT_RM(b[-5]) == 4 || EXT_RM(b[-5]) == 5)) ||
          (EXT_MOD(b[-5]) == 2 && EXT_RM(b[-5]) != 4))) {
         indirect = true;
     }
