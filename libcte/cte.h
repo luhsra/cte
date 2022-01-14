@@ -16,7 +16,7 @@ enum cte_flags {
     CTE_STRICT_CALLGRAPH = 1,
 };
 
-#define  CTE_NOWIPE 1
+#define  CTE_LOAD   1
 #define  CTE_WIPE   2
 #define  CTE_KILL   3
 #define  CTE_SYSTEM_FORCE  0x40

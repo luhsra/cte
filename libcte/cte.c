@@ -240,13 +240,15 @@ static int cte_find_compare_in_function(const void *post_call_addr,
 
 CTE_ESSENTIAL
 static inline
-bool cte_func_loaded(cte_function *func) {
+char cte_func_state(cte_function *func) {
     cte_implant *implant = func->vaddr;
+    if (*(uint8_t *)implant == 0xcc)
+        return CTE_KILL;
     if (func->size >= sizeof(cte_implant)) {
         if (cte_implant_valid(implant))
-            return false;
+            return CTE_WIPE;
     }
-    return true;
+    return CTE_LOAD;
 }
 
 static
@@ -985,7 +987,7 @@ int cte_restore(void *addr, void *post_call_addr) {
     // Load the sibling
     if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
         cte_function *func_sibling = cte_vector_get(&functions, f->sibling_idx);
-        if (!cte_func_loaded(func_sibling)) {
+        if (cte_func_state(func_sibling) != CTE_LOAD) {
             // cte_printf("-> load sibling: %s\n", func_sibling->name);
             cte_modify_begin(func_sibling->vaddr, func_sibling->size);
             cte_memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
@@ -1021,17 +1023,18 @@ int cte_restore(void *addr, void *post_call_addr) {
 CTE_ESSENTIAL
 static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     cte_implant *implant = fn->vaddr;
-    if (policy == CTE_NOWIPE) return 0;
-
-    if (fn->size < sizeof(cte_implant)) {
-        cte_text *text = cte_vector_get(&texts, fn->text_idx);
-        if(!text) cte_die("idiot");
-        cte_debug("function %s/%s not large enough for implant (%d < %d)\n",
-                  text->filename, fn->name, fn->size, sizeof(cte_implant));
-        return 0;
-    }
+    // FIXME: This should actually load the function
+    if (policy == CTE_LOAD)
+        cte_die("Policy CTE_LOAD is not yet implemented");
 
     if (policy == CTE_WIPE) {
+        if (fn->size < sizeof(cte_implant)) {
+            cte_text *text = cte_vector_get(&texts, fn->text_idx);
+            if(!text) cte_die("idiot");
+            cte_debug("function %s/%s not large enough for implant (%d < %d)\n",
+                      text->filename, fn->name, fn->size, sizeof(cte_implant));
+            return 0;
+        }
         // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
         cte_implant_init(implant, func_id(fn));
 
@@ -1253,7 +1256,7 @@ int cte_wipe_rules(cte_rules *rules) {
         }
 
         if (!f->essential && f != cf) {
-            if (cte_func_loaded(f)) {
+            if (cte_func_state(f) != policy) {
                 if (cte_wipe_fn(f, policy)) { // Wipe Function!
                     wipe_count += 1;
                     wipe_bytes += f->size;
@@ -1394,13 +1397,12 @@ void cte_dump_state(int fd, unsigned flags) {
         for_each_cte_vector(&functions, func) {
             if (!func->body) continue;
 
-            bool loaded = cte_func_loaded(func);
             cte_text *text = cte_vector_get(&texts, func->text_idx);
 
-            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %s, %s, 0x%08x%08x, %s],\n",
+            cte_fdprintf(fd, "    [%d, \"%s\", %d, %d, %d, %s, 0x%08x%08x, %s],\n",
                          func->text_idx, func->name, func->size,
                          func->vaddr - text->vaddr + text->offset,
-                         loaded ? "True": "False",
+                         cte_func_state(func),
                          func->essential ? "True": "False",
 #if CONFIG_STAT
                          HEX32(cte_stat.restore_times[func_id(func)]),
@@ -1428,7 +1430,7 @@ unsigned cte_get_wiped_ranges(struct cte_range *ranges) {
     unsigned ret = 0;
     for_each_cte_vector(&functions, func) {
         if (!func->body) continue;
-        if (!cte_func_loaded(func)) {
+        if (cte_func_state(func) != CTE_LOAD) {
             if (ret > 0 &&
                 func->vaddr == (ranges[ret-1].address + ranges[ret-1].length) ) {
                 ranges[ret-1].length += func->size;
