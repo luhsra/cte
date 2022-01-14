@@ -35,7 +35,8 @@ struct cte_function {
     void *vaddr;
     void *body;
     struct cte_info_fn *info_fn;
-    bool essential;
+    bool essential : 1;
+    bool disable_caller_validation : 1;
     uint32_t sibling_idx;
 };
 typedef struct cte_function cte_function;

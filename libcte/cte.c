@@ -566,6 +566,9 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
 
         // Does this function have an essential name?
         struct { char begin; char *pattern; } names[] = {
+            // FIXME: As soon the sibling information from ctemeta is
+            // available, uncomment this.
+            {true ? 0 : -1, "__memmove_avx_unaligned_erms"},
             {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"}, {0, "start_thread"},
             // mprotect
             {0, "mprotect"}, {0, "pkey_mprotect"}, {0, "__mprotect"},
@@ -589,6 +592,12 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                 function->essential |= true;
                 break;
             }
+        }
+        // We disable callsite detection for the trampoline function
+        // of dynamic loading, as its callsite is highly weird.
+        // FIXME: Just improve the callsite detection?
+        if (strcmp(function->name, "_dl_runtime_resolve_xsavec") == 0) {
+            function->disable_caller_validation = 1;
         }
         if (function->essential) {
             //cte_debug("essential: %s %d\n", it->name, function->essential);
@@ -904,19 +913,21 @@ int cte_restore(void *addr, void *post_call_addr) {
         cte_die("Bsearch yielded a different result...\n");
     */
 
-    cte_callsite_type type = cte_decode_callsite(post_call_addr);
-
-    if (type == CALLSITE_TYPE_INVALID) {
-        cte_printf("WARNING: Invalid Callsite: ");
-        unsigned char *s = post_call_addr;
-        for (unsigned char *b = s - 16; b < s; b++)
-            cte_printf("%x ", *b);
-        cte_printf(" <RETADDR>\n");
-        cte_debug_restore(addr, post_call_addr, f,
-                          bsearch(post_call_addr, functions.front, functions.length,
-                                  sizeof(cte_function), cte_find_compare_in_function));
-        cte_printf("\n");
-        /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
+    cte_callsite_type type = CALLSITE_TYPE_INDIRECT;
+    if (!f->disable_caller_validation) {
+        type = cte_decode_callsite(post_call_addr);
+        if (type == CALLSITE_TYPE_INVALID) {
+            cte_printf("WARNING: Invalid Callsite: ");
+            unsigned char *s = post_call_addr;
+            for (unsigned char *b = s - 16; b < s; b++)
+                cte_printf("%x ", *b);
+            cte_printf(" <RETADDR>\n");
+            cte_debug_restore(addr, post_call_addr, f,
+                              bsearch(post_call_addr, functions.front, functions.length,
+                                      sizeof(cte_function), cte_find_compare_in_function));
+            cte_printf("\n");
+            /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
+        }
     }
 
     if (!strict_callgraph)
