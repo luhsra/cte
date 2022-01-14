@@ -242,6 +242,10 @@ int main(int argc, char *argv[]) {
             // Intercession Church on the Nerl in Bogolyubovo near Vladimir, Russia
             struct imgRawImage *image = loadJpegImageFile_wiped(img_mmview, false, imageFile);
 
+            // As loading the image allocates a 41 MiB buffer, it uses
+            // mmap. With mmviews, these have to be synchronized => We
+            // are a little bit slower here.
+
             struct imgRawImage *grayscale = NULL;
             filterGrayscale(image, &grayscale);
 
