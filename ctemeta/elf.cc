@@ -241,8 +241,7 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                         // FIXME: Handling this would require rearranging some
                         //        data structures
                         if (rel_type == R_X86_64_64)
-                            error(Error::ELF,
-                                  "Direct reference to an undefined function: %s\n",
+                            warn("Direct reference to an undefined function: %s\n",
                                   name);
 
                         continue;
