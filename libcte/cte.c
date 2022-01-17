@@ -768,6 +768,7 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
     unsigned char *b = post_call_addr;
     bool indirect = false;
     bool direct = false;
+    bool signal = false;
 
 #define EXT_MOD(ob) ((ob >> 6) & 0x03)
 #define EXT_REG(ob) ((ob >> 3) & 0x07)
@@ -796,6 +797,13 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
         (EXT_MOD(b[-6]) == 2 && EXT_RM(b[-6]) == 4)) {
         indirect = true;
     }
+    if (/* mov 0xf, rax */
+           b[0] == 0x48 && b[1] == 0xc7 && b[2] == 0xc0 && b[3] == 0x0f
+        && b[4] == 0    && b[5] == 0    && b[6] == 0
+        /* syscall */
+        && b[7] == 0xf  && b[8] == 0x05) {
+        signal = true;
+    }
     // GCC does not use far indirect calls (EXT_MOD=3)
 
     // direct call
@@ -805,7 +813,7 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
 
     if (indirect && direct)
         return CALLSITE_TYPE_DIRECT_OR_INDIRECT;
-    if (indirect)
+    if (indirect || signal)
         return CALLSITE_TYPE_INDIRECT;
     if (direct)
         return CALLSITE_TYPE_DIRECT;
@@ -919,11 +927,14 @@ int cte_restore(void *addr, void *post_call_addr) {
     if (!f->disable_caller_validation) {
         type = cte_decode_callsite(post_call_addr);
         if (type == CALLSITE_TYPE_INVALID) {
-            cte_printf("WARNING: Invalid Callsite: ");
+            cte_printf("WARNING: Invalid Callsite (callee %s): ", f->name);
             unsigned char *s = post_call_addr;
             for (unsigned char *b = s - 16; b < s; b++)
                 cte_printf("%x ", *b);
-            cte_printf(" <RETADDR>\n");
+            cte_printf(" <RETADDR %p>", s);
+            for (unsigned char *b = s; b < s+16; b++)
+                cte_printf(" %x", *b);
+            cte_printf("\n");
             cte_debug_restore(addr, post_call_addr, f,
                               bsearch(post_call_addr, functions.front, functions.length,
                                       sizeof(cte_function), cte_find_compare_in_function));
