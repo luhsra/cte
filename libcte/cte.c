@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stddef.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -237,6 +238,44 @@ static int cte_find_compare_in_function(const void *post_call_addr,
     else
         return 1;
 }
+
+
+CTE_ESSENTIAL
+static
+void cte_implant_init(cte_implant *ptr, unsigned _func_idx) {
+    // If there cte_restore is close enough, we call it directly
+    ptrdiff_t diff = (void*) cte_restore_entry - ((void*)ptr + 12);
+    if (INT_MIN < diff  && diff < INT_MAX) {
+        for (unsigned i = 0; i < 7; i++)
+            ptr->call.nop[i] = 0x90; // nop
+        ptr->call.call[0] = 0xe8;
+        ptr->call.offset  = diff;
+    } else {
+        ptr->icall.mov[0] = 0x48; /* 64bit prefix */
+        ptr->icall.mov[1] = 0xb8; /* absmov to %rax  */
+        ptr->icall.mov_imm = (uint64_t)cte_restore_entry;
+        ptr->icall.icall[0] = 0xff; /* call *%rax */
+        ptr->icall.icall[1] = 0xd0;
+    }
+    ptr->func_idx = (_func_idx);
+
+}
+
+CTE_ESSENTIAL
+static
+bool cte_implant_valid(cte_implant *ptr) {
+    // Is it a direct call?
+    if (ptr && ptr->call.call[0] == 0xe8 &&
+        ptr->call.offset == (void*) cte_restore_entry - ((void*)ptr + 12))
+        return true;
+    // Is it an indirect call?
+    if (ptr && ptr->icall.mov[0] == 0x48 && ptr->icall.mov[1] == 0xb8 && ptr->icall.mov_imm == (uint64_t)cte_restore_entry
+        && ptr->icall.icall[0] == 0xff && ptr->icall.icall[1] == 0xd0)
+        return true;
+
+    return false;
+}
+
 
 CTE_ESSENTIAL
 static inline
@@ -916,6 +955,7 @@ int cte_restore(void *addr, void *post_call_addr) {
         cte_die("Could not find function with id %d (max_id=%d)\n",
                 implant->func_idx, functions.length);
 
+
     /*
     cte_function *f2 = bsearch(implant, functions.front, functions.length,
                                sizeof(cte_function), cte_find_compare_function);
@@ -1038,6 +1078,11 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     if (policy == CTE_LOAD)
         cte_die("Policy CTE_LOAD is not yet implemented");
 
+    // CTE_WIPE|CTE_KILL: Wipe the whole function body
+    cte_memset(fn->vaddr,
+               0xcc, // int3 int3 int3...
+               fn->size);
+
     if (policy == CTE_WIPE) {
         if (fn->size < sizeof(cte_implant)) {
             cte_text *text = cte_vector_get(&texts, fn->text_idx);
@@ -1048,16 +1093,6 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
         }
         // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
         cte_implant_init(implant, func_id(fn));
-
-        // Wipe the rest of the function body
-        cte_memset(fn->vaddr + sizeof(cte_implant),
-                   0xcc, // int3 int3 int3...
-                   fn->size  - sizeof(cte_implant));
-    } else if (policy == CTE_KILL) {
-        // Wipe the whole function body
-        cte_memset(fn->vaddr,
-                   0xcc, // int3 int3 int3...
-                   fn->size);
     }
 
     return 1;
