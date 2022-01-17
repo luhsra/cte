@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include "../common/meta.h"
 
 #define CTE_ESSENTIAL       __attribute__((section(".cte_essential"), used))
 #define CTE_ESSENTIAL_NAKED __attribute__((section(".cte_essential"), used, naked))
@@ -9,19 +11,9 @@
 
 #define CTE_SEALED          __attribute__((section(".cte_sealed")))
 
-
-struct __attribute__((packed)) cte_info_fn {
-    void *vaddr;
-    int flags;
-    int calles_count;
-    void **callees;
-};
-typedef struct cte_info_fn cte_info_fn;
-
 struct cte_text {
     char *filename;
-    struct cte_info_fn *info_fns;
-    size_t info_fns_count;
+    cte_meta_header *meta;
     void *vaddr;
     size_t offset;
     size_t size;
@@ -34,7 +26,7 @@ struct cte_function {
     size_t size;
     void *vaddr;
     void *body;
-    struct cte_info_fn *info_fn;
+    cte_meta_function *meta;
     bool essential;
     uint32_t sibling_idx;
 };
@@ -87,10 +79,6 @@ typedef struct cte_stat {
 #define timespec_diff_ns(ts0, ts)   (((ts).tv_sec - (ts0).tv_sec)*1000LL*1000LL*1000LL + ((ts).tv_nsec - (ts0).tv_nsec))
 
 #endif
-
-static const int FLAG_INDIRECTLY_ALLOWED = (1 << 2); // FIXME: Wrong place
-static const int FLAG_ADDRESS_TAKEN = (1 << 1);
-static const int FLAG_DEFINITION = (1 << 0);
 
 extern void cte_restore_entry(void);
 

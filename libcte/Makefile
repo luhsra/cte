@@ -15,6 +15,7 @@ CC := gcc
 CFLAGS += -Wall -Wextra -O2 -ggdb -DCONFIG_PRINT=$(CONFIG_PRINT) -DCONFIG_STAT=$(CONFIG_STAT) -DCONFIG_DEBUG=$(CONFIG_DEBUG) -DCONFIG_THRESHOLD=$(CONFIG_THRESHOLD) -fPIC
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCTS = libcte.a libcte.so libcte-minimal.a
+HEADERS = cte.h cte-impl.h ../common/meta.h
 
 .PHONY: clean
 
@@ -29,15 +30,13 @@ libcte.a: $(OBJECTS)
 libcte-minimal.a: cte-minimal.o cte-asm.o cte-printf.o
 	ar rcs $@ $^
 
-
-.SECONDEXPANSION:
-%.o: %.c $$*.h cte-impl.h $(MAKEFILE_LIST)
+%.o: %.c $(HEADERS) $(MAKEFILE_LIST)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-%.o: %.S  $(MAKEFILE_LIST)
+%.o: %.S $(MAKEFILE_LIST)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-cte-minimal.o: cte.c cte.h cte-impl.h $(MAKEFILE_LIST)
+cte-minimal.o: cte.c $(HEADERS) $(MAKEFILE_LIST)
 	$(CC) $(CFLAGS) -DCONFIG_THRESHOLD=0 -DCONFIG_DEBUG=0 -c -o $@ $<
 
 

@@ -21,6 +21,7 @@
 #include "cte-impl.h"
 #include "cte-printf.h"
 #include "mmview.h"
+#include "../common/meta.h"
 
 CTE_SEALED static cte_vector texts;     // vector of cte_text
 CTE_SEALED static cte_vector plts;      // vector of cte_plt
@@ -83,7 +84,7 @@ static void cte_mmap_inc(void **addr, size_t *size) {
         *addr = mremap(*addr, *size, new_size, MREMAP_MAYMOVE);
     }
     if (*addr == MAP_FAILED) {
-        cte_die("mmap failed");
+        cte_die("mmap failed\n");
     }
     *size = new_size;
 }
@@ -118,20 +119,6 @@ static void *cte_vector_get(cte_vector *vector, uint32_t idx) {
          (void*)elem < (vector)->front + ((vector)->element_size) * (vector)->length; \
          elem = (void*) elem + ((vector)->element_size))
 
-
-static int cte_sort_compare_info_fn(const void *e1, const void *e2) {
-    cte_info_fn *a = (cte_info_fn*)e1;
-    cte_info_fn *b = (cte_info_fn*)e2;
-
-    // Zeroed out cte_info_fns go to the end of the list
-    if (a->vaddr == NULL) return 1;
-    if (b->vaddr == NULL) return -1;
-
-    if (a->vaddr > b->vaddr) return  1;
-    if (a->vaddr < b->vaddr) return -1;
-    return 0;
-}
-
 static int cte_sort_compare_function(const void *e1, const void *e2) {
     cte_function *a = (cte_function*)e1;
     cte_function *b = (cte_function*)e2;
@@ -145,16 +132,6 @@ static int cte_sort_compare_function(const void *e1, const void *e2) {
     return 0;
 }
 
-static int cte_find_compare_info_fn(const void *addr, const void *element) {
-    cte_info_fn *el = (cte_info_fn*)element;
-    if (addr == el->vaddr)
-        return 0;
-    if (addr < el->vaddr)
-        return -1;
-    else
-        return 1;
-}
-
 CTE_ESSENTIAL
 static void *cte_align_to_page(void *addr) {
     static size_t page_size = 0;
@@ -162,51 +139,6 @@ static void *cte_align_to_page(void *addr) {
         page_size = sysconf(_SC_PAGESIZE);
     }
     return (void*)((size_t)addr & ~(page_size - 1));
-}
-
-static int cte_fns_init(cte_info_fn *info_fns, size_t *info_fns_count) {
-    // Sort the buffer
-    size_t old_count = *info_fns_count;
-    qsort(info_fns, old_count, sizeof(cte_info_fn),
-          cte_sort_compare_info_fn);
-
-    // Zero out duplicates but keep the address_taken bit
-    size_t new_count = 0;
-    cte_info_fn *curr = info_fns;
-    cte_info_fn *first = NULL;
-    cte_info_fn *stop = info_fns + old_count;
-    while (curr < stop) {
-        if (!first) {
-            first = curr;
-            new_count++;
-        }
-        curr++;
-
-        if (curr >= stop || curr->vaddr != first->vaddr) {
-            // zero out the duplicates and set flags
-            cte_info_fn *selected = first;
-            int flags = first->flags;
-            for (cte_info_fn *i = first + 1; i < curr; i++) {
-                if (i->calles_count > 0) {
-                    if (selected->calles_count > 0)
-                        cte_die("Multiple definitions\n");
-                    selected->vaddr = NULL;
-                    selected = i;
-                } else {
-                    i->vaddr = NULL;
-                }
-                flags |= i->flags & FLAG_ADDRESS_TAKEN;
-            }
-            selected->flags |= flags & FLAG_ADDRESS_TAKEN;
-            first = NULL;
-        }
-    }
-
-    // Sort the buffer again to eliminate zeroed out duplicates
-    qsort(info_fns, old_count, sizeof(cte_info_fn),
-          cte_sort_compare_info_fn);
-    *info_fns_count = new_count;
-    return 0;
 }
 
 static void *cte_get_vaddr(struct dl_phdr_info *info, uintptr_t addr) {
@@ -239,6 +171,18 @@ static int cte_find_compare_in_function(const void *post_call_addr,
 }
 
 CTE_ESSENTIAL
+static cte_function *cte_find_function(void* addr) {
+    return bsearch(addr, functions.front, functions.length,
+                   sizeof(cte_function), cte_find_compare_function);
+}
+
+CTE_ESSENTIAL
+static cte_function *cte_find_containing_function(void *addr) {
+    return bsearch(addr, functions.front, functions.length,
+                   sizeof(cte_function), cte_find_compare_in_function);
+}
+
+CTE_ESSENTIAL
 static inline
 bool cte_func_loaded(cte_function *func) {
     cte_implant *implant = func->vaddr;
@@ -247,6 +191,291 @@ bool cte_func_loaded(cte_function *func) {
             return false;
     }
     return true;
+}
+
+static void *cte_decode_plt(void *entry) {
+    uint8_t *a = (uint8_t*)entry;
+    if (a[0] != 0xff)
+        return NULL;
+    if (a[1] != 0x25)
+        return NULL;
+    uint8_t *rip = a + 6;
+    uint32_t offset = *((uint32_t*)(a + 2));
+    uintptr_t *got_entry = (uintptr_t*)(rip + offset);
+    return (void*)(*got_entry);
+}
+
+static bool cte_is_plt(void *addr) {
+    cte_plt *plt;
+    for_each_cte_vector(&plts, plt) {
+        if (addr >= plt->vaddr && addr < plt->vaddr + plt->size)
+            return true;
+    }
+    return false;
+}
+
+static cte_meta_header *cte_meta_init(void *data, size_t size, void *load_addr) {
+    if (size < sizeof(cte_meta_header))
+        cte_die("Invalid meta info\n");
+
+    cte_meta_header *header = data;
+    if (strcmp(header->magic, "CTE"))
+        cte_die("Invalid meta info\n");
+
+    if (header->version != CTE_VERSION)
+        cte_die("Unexpected meta info version: %u (expected: %u)",
+                header->version, CTE_VERSION);
+
+    if (size < (sizeof(cte_meta_header) +
+                header->functions_count * sizeof(cte_meta_function)))
+        cte_die("Corrupt meta info\n");
+
+    cte_meta_function *fn_start = (void*)((uint8_t*)data +
+                                          sizeof(cte_meta_header));
+    cte_meta_function *fn_end = fn_start + header->functions_count;
+
+#define ADDR_OFFSET(base, offset) \
+    ((void*)((uintptr_t)(base) + (uintptr_t)(offset)))
+
+    for (cte_meta_function *fn = fn_start; fn < fn_end; fn++) {
+        fn->vaddr = ADDR_OFFSET(load_addr, fn->vaddr);
+
+        if (fn->callees)
+            fn->callees = ADDR_OFFSET(data, fn->callees);
+        if (fn->jumpees)
+            fn->jumpees = ADDR_OFFSET(data, fn->jumpees);
+        if (fn->siblings)
+            fn->siblings = ADDR_OFFSET(data, fn->siblings);
+
+        if ((fn->callees && ((void*)&fn->callees[fn->callees_count] > data + size)) ||
+            (fn->jumpees && ((void*)&fn->jumpees[fn->jumpees_count] > data + size)) ||
+            (fn->siblings && ((void*)&fn->siblings[fn->siblings_count] > data + size)))
+            cte_die("Corrupt meta info\n");
+
+        for (uint32_t i = 0; i < fn->callees_count; i++) {
+            fn->callees[i] = ADDR_OFFSET(load_addr, fn->callees[i]);
+        }
+        for (uint32_t i = 0; i < fn->jumpees_count; i++) {
+            fn->jumpees[i] = ADDR_OFFSET(load_addr, fn->jumpees[i]);
+        }
+        for (uint32_t i = 0; i < fn->siblings_count; i++) {
+            fn->siblings[i] = ADDR_OFFSET(load_addr, fn->siblings[i]);
+        }
+    }
+#undef ADDR_OFFSET
+
+    return header;
+}
+
+static cte_meta_header *cte_meta_load(char *objname, void *load_addr) {
+    char filename[256];
+    strcpy(filename, objname);
+    strcat(filename, ".cte");
+
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) {
+        printf("Warning: Could not open %s\n", filename);
+        return NULL;
+    }
+    struct stat sb;
+    fstat(fd, &sb);
+
+    size_t size = sb.st_size;
+    char *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    if (data == MAP_FAILED)
+        cte_die("mmap failed: %s\n", filename);
+    close(fd);
+
+    return cte_meta_init(data, size, load_addr);
+}
+
+typedef struct cte_pset {
+    void **front;
+    size_t length;
+} cte_pset;
+
+static const cte_pset EMPTY_PSET;
+
+static void cte_pset_insert(cte_pset *pset, void* item) {
+    for (size_t n = 0; n < pset->length; n++) {
+        if (pset->front[n] == item)
+            return;
+    }
+    size_t offset = pset->length++;
+    pset->front = realloc(pset->front, pset->length * sizeof(void*));
+    pset->front[offset] = item;
+}
+
+static void cte_pset_free(cte_pset *pset) {
+    free(pset->front);
+}
+
+static void cte_meta_reset_visited_flags(void) {
+    cte_function *fn;
+    for_each_cte_vector(&functions, fn) {
+        if (fn->meta)
+            fn->meta->flags &= ~FLAG_VISITED;
+    }
+}
+
+static void cte_meta_propagate_jumpees(cte_function *fn, cte_pset *pset) {
+    if (!fn || !fn->meta || fn->meta->flags & FLAG_VISITED)
+        return;
+    fn->meta->flags |= FLAG_VISITED;
+
+    for (uint32_t i = 0; i < fn->meta->jumpees_count; i++) {
+        cte_pset_insert(pset, fn->meta->jumpees[i]);
+        cte_function *jumpee = cte_find_function(fn->meta->jumpees[i]);
+        cte_meta_propagate_jumpees(jumpee, pset);
+    }
+}
+
+static void cte_meta_assign(void) {
+    cte_text *text;
+    cte_function *fn;
+
+    // Resolve all callees to plt functions
+    // FIXME: requires env BIND_NOW set
+    for_each_cte_vector(&texts, text) {
+        if (!text->meta)
+            continue;
+        cte_meta_function *start = cte_meta_get_functions(text->meta);
+        cte_meta_function *end = start + text->meta->functions_count;
+        for (cte_meta_function *meta = start; meta < end; meta++) {
+            for (uint32_t i = 0; i < meta->callees_count; i++) {
+                if (cte_is_plt(meta->callees[i]))
+                    meta->callees[i] = cte_decode_plt(meta->callees[i]);
+            }
+            for (uint32_t i = 0; i < meta->jumpees_count; i++) {
+                if (cte_is_plt(meta->jumpees[i]))
+                    meta->jumpees[i] = cte_decode_plt(meta->jumpees[i]);
+            }
+        }
+    }
+
+    // Decode all functions
+    for_each_cte_vector(&texts, text) {
+        if (!text->meta)
+            continue;
+        cte_meta_function *start = cte_meta_get_functions(text->meta);
+        cte_meta_function *end = start + text->meta->functions_count;
+        for (cte_meta_function *meta = start; meta < end; meta++) {
+            void *org_addr = meta->vaddr;
+            if (cte_is_plt(meta->vaddr)) {
+                // FIXME: requires env BIND_NOW set
+                meta->vaddr = cte_decode_plt(meta->vaddr);
+            }
+
+            cte_function *fn = cte_find_function(meta->vaddr);
+
+            /* if (!fn) */
+            /*     cte_die("meta: function not found: %p / %p\n", */
+            /*             meta->vaddr, org_addr - text->vaddr); */
+            ///// FIXME
+            if (!fn) {
+                printf("Warning: Meta: function not found: %p / %p [%s]\n",
+                       meta->vaddr, org_addr, text->filename);
+                continue;
+            }
+            ///// FIXME
+
+            if (fn->meta) {
+                if (fn->meta->flags & FLAG_DEFINITION) {
+                    fn->meta->flags |= meta->flags & FLAG_ADDRESS_TAKEN;
+                } else {
+                    meta->flags |= fn->meta->flags & FLAG_ADDRESS_TAKEN;
+                    fn->meta = meta;
+                }
+            } else {
+                fn->meta = meta;
+            }
+        }
+    }
+
+    // TODO Check if all meta fns have definition flag set
+
+    // Propagate callees and copy meta objects
+    uint8_t *data = NULL;
+    size_t data_capacity = 0;
+    size_t data_size = 0;
+    for_each_cte_vector(&functions, fn) {
+        if (!fn->meta)
+            continue;
+
+        // Propagate and gather all callees from jumpees
+        cte_pset set = EMPTY_PSET;
+        cte_meta_reset_visited_flags();
+        for (uint32_t i = 0; i < fn->meta->callees_count; i++) {
+            cte_pset_insert(&set, fn->meta->callees[i]);
+            cte_function *cfn = cte_find_function(fn->meta->callees[i]);
+            if (!cfn)
+                continue;
+            cte_meta_propagate_jumpees(cfn, &set);
+        }
+
+        // Allocate and initialize a new meta object
+        size_t i_meta = data_size;
+        size_t i_callees = i_meta + sizeof(cte_meta_function);
+        size_t i_siblings = i_callees + set.length * sizeof(void*);
+        data_size = i_siblings + fn->meta->siblings_count * sizeof(void*);
+        while (data_size > data_capacity) {
+            cte_mmap_inc((void*)(&data), &data_capacity);
+        }
+        cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
+        void **callees = (void**)(&data[i_callees]);
+        void **siblings = (void**)(&data[i_siblings]);
+        *meta = *fn->meta;
+        memcpy(callees, set.front, set.length * sizeof(void*));
+        meta->callees_count = set.length;
+        memcpy(siblings, fn->meta->siblings,
+               fn->meta->siblings_count * sizeof(void*));
+        cte_pset_free(&set);
+    }
+    // Assign newly created meta objects to the functions
+    size_t data_idx = 0;
+    for_each_cte_vector(&functions, fn) {
+        if (!fn->meta)
+            continue;
+        size_t i_meta = data_idx;
+        cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
+        size_t i_callees = i_meta + sizeof(cte_meta_function);
+        size_t i_siblings = i_callees + meta->callees_count * sizeof(void*);
+        data_idx = i_siblings + meta->siblings_count * sizeof(void*);
+        meta->callees = (void**)(&data[i_callees]);
+        meta->jumpees = NULL;
+        meta->jumpees_count = 0;
+        meta->siblings = (void**)(&data[i_siblings]);
+        fn->meta = meta;
+    }
+
+    // Propagate indirect jumps
+    for_each_cte_vector(&functions, fn) {
+        if (!fn->meta)
+            continue;
+        for (uint32_t i = 0; i < fn->meta->callees_count; i++) {
+            cte_function *cf = cte_find_function(fn->meta->callees[i]);
+            if (cf && cf->meta && cf->meta->flags & FLAG_INDIRECT_JUMPS)
+                fn->meta->flags |= FLAG_INDIRECT_CALLS;
+        }
+        for (uint32_t i = 0; i < fn->meta->siblings_count; i++) {
+            cte_function *sf = cte_find_function(fn->meta->siblings[i]);
+            if (sf && sf->meta && sf->meta->flags & FLAG_INDIRECT_JUMPS)
+                fn->meta->flags |= FLAG_INDIRECT_CALLS;
+        }
+    }
+
+    // Write protect meta info
+    if (mprotect(data, data_capacity, PROT_READ) == -1)
+        cte_die("Meta: %s: sealing failed\n", text->filename);
+
+    // Unmap meta files
+    for_each_cte_vector(&texts, text) {
+        if (!text->meta)
+            continue;
+        if (munmap(text->meta, text->meta->size) < 0)
+            cte_die("Meta: %s: unmap failed\n", text->filename);
+        text->meta = NULL;
+    }
 }
 
 static
@@ -293,7 +522,7 @@ cte_elf_scan_symbols(Elf *elf, cte_text * text, ElfW(Addr) dlpi_addr) {
                     .size      = sym.st_size,
                     .vaddr     = (void*)((uintptr_t)dlpi_addr + sym.st_value),
                     .body      = NULL,
-                    .info_fn   = NULL,
+                    .meta      = NULL,
                     .essential = false,
                     .sibling_idx = FUNC_ID_INVALID,
                 };
@@ -335,9 +564,7 @@ unsigned cte_rules_set_func(cte_rules *rules, cte_wipe_policy policy, void *fptr
     unsigned ret = 0;
     assert(children == 0 && "Not implemented yet");
 
-    cte_function *func = bsearch(fptr, functions.front, functions.length,
-                                 sizeof(cte_function),
-                                 cte_find_compare_function);
+    cte_function *func = cte_find_function(fptr);
     if (func) {
         if (!(rules->policy[func_id(func)] & CTE_FORCE)) {
             rules->policy[func_id(func)] = policy;
@@ -452,13 +679,10 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         }
     }
 
-    cte_info_fn *info_fns = NULL;
-    size_t info_fns_count = 0;
     void *essential_sec_vaddr = NULL;
     size_t essential_sec_size = 0;
     cte_plt *plt = NULL;
 
-    // Collect function metadata from compiler plugin
     section = NULL;
     while ((section = elf_nextscn(elf, section)) != NULL) {
         GElf_Shdr shdr;
@@ -468,17 +692,6 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         if ((name = elf_strptr(elf, shstrndx, shdr.sh_name)) == NULL)
             return CTE_ERROR_ELF;
 
-        if (strcmp(name, ".cte_fn") == 0) {
-            void *addr = cte_get_vaddr(info, shdr.sh_addr);
-            info_fns = addr;
-            info_fns_count = shdr.sh_size / sizeof(cte_info_fn);
-            printf("fn section: [%s] %s (%p, count: %lu)\n", filename, name,
-                   info_fns, info_fns_count);
-            int rc = cte_fns_init(info_fns, &info_fns_count);
-            if (rc < 0)
-                return rc;
-            break;
-        }
         if (strcmp(name, ".cte_essential") == 0) {
             essential_sec_vaddr = cte_get_vaddr(info, shdr.sh_addr);
             essential_sec_size = shdr.sh_size;
@@ -499,17 +712,19 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         }
     }
 
+    // Init meta data
+    cte_meta_header *meta = cte_meta_load(filename, (void*)info->dlpi_addr);
+
     cte_text *text = cte_vector_push(&texts);
     uint32_t text_idx = (text - (cte_text *)texts.front);
     *text = (cte_text) {
         .filename = strdup(filename),
-        .info_fns = info_fns,
-        .info_fns_count = info_fns_count,
+        .meta = meta,
         .vaddr = text_vaddr,
         .offset = text_offset,
         .size = text_size,
     };
-#ifdef CONFIG_STAT
+#if CONFIG_STAT
     cte_stat.text_bytes += text_size;
 #endif
 
@@ -593,13 +808,6 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         if (function->essential) {
             //cte_debug("essential: %s %d\n", it->name, function->essential);
         }
-
-        if (text->info_fns) {
-            function->info_fn = bsearch(function->vaddr, text->info_fns,
-                                        text->info_fns_count,
-                                        sizeof(cte_info_fn),
-                                        cte_find_compare_info_fn);
-        }
     }
 
     // Step 3: Sort by vaddr again and eliminate zeroed-out duplicates (truncate)
@@ -631,19 +839,6 @@ static void cte_modify_end(void *start, size_t size) {
     mprotect(aligned_start, len, PROT_READ | PROT_EXEC);
     __builtin___clear_cache((char*)aligned_start, (char*)stop);
     // cte_printf("modify_end: [%p-%p]%p-%p\n", start, stop, aligned_start, aligned_start+len);
-}
-
-CTE_ESSENTIAL
-static void *cte_decode_plt(void *entry) {
-    uint8_t *a = (uint8_t*)entry;
-    if (a[0] != 0xff)
-        return NULL;
-    if (a[1] != 0x25)  // FIXME: this was determined empirically
-        return NULL;
-    uint8_t *rip = a + 6;
-    uint32_t offset = *((uint32_t*)(a + 2));
-    uintptr_t *got_entry = (uintptr_t*)(rip + offset);
-    return (void*)(*got_entry);
 }
 
 #pragma GCC push_options
@@ -706,13 +901,11 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
                (caller_text) ? caller_text->filename : "??",
                (caller_text) ? (post_call_addr - caller_text->vaddr) : 0);
 
-    if (caller && caller->info_fn) {
-        cte_printf("Allowed callees (%d)\n", caller->info_fn->calles_count);
-        for (int i = 0; i < caller->info_fn->calles_count; i++) {
-            void *callee = caller->info_fn->callees[i];
-            cte_function *cd = bsearch(callee, functions.front, functions.length,
-                                       sizeof(cte_function),
-                                       cte_find_compare_function);
+    if (caller && caller->meta) {
+        cte_printf("Allowed callees (%d)\n", caller->meta->callees_count);
+        for (uint32_t i = 0; i < caller->meta->callees_count; i++) {
+            void *callee = caller->meta->callees[i];
+            cte_function *cd = cte_find_function(callee);
             if (cd) {
                 cte_printf("  %p: %s\n", callee, cd->name);
             } else {
@@ -806,74 +999,31 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
 }
 
 CTE_ESSENTIAL
-static void cte_indirectly_allow(cte_function *function) {
-    if (!function || !function->info_fn)
-        return;
-    if (function->info_fn->flags & FLAG_INDIRECTLY_ALLOWED)
-        return;
-
-    function->info_fn->flags |= FLAG_INDIRECTLY_ALLOWED;
-
-    for (int i = 0; i < function->info_fn->calles_count; i++) {
-        void *callee = function->info_fn->callees[i];
-        cte_function *cf = bsearch(callee, functions.front, functions.length,
-                                   sizeof(cte_function),
-                                   cte_find_compare_function);
-        cte_indirectly_allow(cf);
-    }
-}
-
-CTE_ESSENTIAL
-static bool cte_check_call(void* called_addr, cte_function *caller, int depth) {
-    if (!caller->info_fn) {
-        /* cte_printf("CALLER NO INFO_FN: %s\n", caller->name); */
+static bool cte_check_call(void* called_addr, cte_function *callee,
+                               cte_function *caller) {
+    if (!caller->meta) {
+        // FIXME
+        cte_printf("CALLER NO META: %s\n", caller->name);
         return true;
     }
 
-    // A caller function was found, and it has a info_fn
-    // Let's see if we are allowed to call function f
-    for (int i = 0; i < caller->info_fn->calles_count; i++) {
-        void *callee = caller->info_fn->callees[i];
-        if (callee == called_addr) {
-            return true;
-        }
-        // Maybe the callee is a pointer to a .plt section
-        // FIXME: performance?
-        cte_plt *pa = plts.front;
-        for (cte_plt *p = pa; p < &pa[plts.length]; p++) {
-            if (callee >= p->vaddr &&
-                (uint8_t*)callee < ((uint8_t*)p->vaddr + p->size)) {
-                void *real_callee = cte_decode_plt(callee);
-
-                // Update the callee pointer in order to avoid checking
-                // the plts in the future for this callee.
-                // FIXME: This should be safe...
-                // FIXME: However, this should not be allowed.
-                //        As an attacker might tamper callee addresses.
-                // NOTE:  The recursive callee check below relies on it.
-                caller->info_fn->callees[i] = real_callee;
-
-                if (real_callee == called_addr) {
-                    return true;
-                }
-            }
-        }
+    if (!(caller->meta->flags & FLAG_DEFINITION)) {
+        // FIXME
+        cte_printf("CALLER NO DEFINITION: %s\n", caller->name);
+        return true;
     }
 
-    // In some cases functions are called with a jump instruction and reuse
-    // their parent's frame.
-    // In these situations we won't find the real caller via the return pointer
-    // To solve this, we recursively iterate the calles and check their callees.
-    // Nesting is bound (by the depth argument) to avoid recursion.
-    if (depth > 0) {
-        for (int i = 0; i < caller->info_fn->calles_count; i++) {
-            void *callee = caller->info_fn->callees[i];
-            cte_function *cf = bsearch(callee, functions.front, functions.length,
-                                       sizeof(cte_function),
-                                       cte_find_compare_function);
-            if (cf && cte_check_call(called_addr, cf, depth - 1))
-                return true;
-        }
+    if ((caller->meta->flags & FLAG_INDIRECT_CALLS) &&
+        (callee->meta && (callee->meta->flags & FLAG_ADDRESS_TAKEN))) {
+        return true;
+    }
+
+    // A caller function was found, and it has .meta set
+    // Let's see if we are allowed to call function f
+    for (uint32_t i = 0; i < caller->meta->callees_count; i++) {
+        void *callee = caller->meta->callees[i];
+        if (callee == called_addr)
+            return true;
     }
 
     return false;
@@ -898,8 +1048,7 @@ int cte_restore(void *addr, void *post_call_addr) {
                 implant->func_idx, functions.length);
 
     /*
-    cte_function *f2 = bsearch(implant, functions.front, functions.length,
-                               sizeof(cte_function), cte_find_compare_function);
+    cte_function *f2 = cte_find_function(implant);
     if (f != f2)
         cte_die("Bsearch yielded a different result...\n");
     */
@@ -913,8 +1062,7 @@ int cte_restore(void *addr, void *post_call_addr) {
             cte_printf("%x ", *b);
         cte_printf(" <RETADDR>\n");
         cte_debug_restore(addr, post_call_addr, f,
-                          bsearch(post_call_addr, functions.front, functions.length,
-                                  sizeof(cte_function), cte_find_compare_in_function));
+                          cte_find_containing_function(post_call_addr));
         cte_printf("\n");
         /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
     }
@@ -922,33 +1070,20 @@ int cte_restore(void *addr, void *post_call_addr) {
     if (!strict_callgraph)
         goto allowed;
 
-    if (type != CALLSITE_TYPE_DIRECT) {  // TODO: get rid of invalid callsites
-        // The function can be inserted if its address is taken
-        if (f->info_fn && (f->info_fn->flags & FLAG_ADDRESS_TAKEN)) {
-
-            // This is most likely an indirect call.
-            // Mark all callees as indirectly allowed.
-            cte_indirectly_allow(f);
-
-            goto allowed;
-        }
-
-        // Maybe the callee has been indirectly allowed.
-        if (f->info_fn && (f->info_fn->flags & FLAG_INDIRECTLY_ALLOWED)) {
-            cte_printf("Allow indirect callee %s\n", f->name);
-            goto allowed;
-        }
-    }
+    /* if (type != CALLSITE_TYPE_DIRECT) {  // TODO: get rid of invalid callsites */
+    /*     // The function can be inserted if its address is taken */
+    /*     if (f->meta && (f->meta->flags & FLAG_ADDRESS_TAKEN)) */
+    /*         goto allowed; */
+    /* } */
 
     // Find the caller
-    cte_function *cf = bsearch(post_call_addr, functions.front, functions.length,
-                               sizeof(cte_function), cte_find_compare_in_function);
+    cte_function *cf = cte_find_containing_function(post_call_addr);
     if (!cf) {
         cte_debug_restore(addr, post_call_addr, f, cf);
         cte_die("Caller not found\n");
     }
 
-    if (cte_check_call(addr, cf, 2))
+    if (cte_check_call(addr, f, cf))
         goto allowed;
 
     // Failed to find the callee
@@ -972,22 +1107,43 @@ int cte_restore(void *addr, void *post_call_addr) {
 #endif
 
     // Load the sibling
-    if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
-        cte_function *func_sibling = cte_vector_get(&functions, f->sibling_idx);
-        if (!cte_func_loaded(func_sibling)) {
-            // cte_printf("-> load sibling: %s\n", func_sibling->name);
-            cte_modify_begin(func_sibling->vaddr, func_sibling->size);
-            cte_memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
-            cte_modify_end(func_sibling->vaddr, func_sibling->size);
+    if (f->meta) {
+        for (uint32_t i = 0; i < f->meta->siblings_count; i++) {
+            cte_function *func_sibling = cte_find_function(f->meta->siblings[i]);
+            if (!cte_func_loaded(func_sibling)) {
+                // cte_printf("-> load sibling: %s\n", func_sibling->name);
+                cte_modify_begin(func_sibling->vaddr, func_sibling->size);
+                cte_memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
+                cte_modify_end(func_sibling->vaddr, func_sibling->size);
 
 #if CONFIG_STAT
-            cte_stat.cur_wipe_count -= 1;
-            cte_stat.cur_wipe_bytes -= func_sibling->size;
+                cte_stat.cur_wipe_count -= 1;
+                cte_stat.cur_wipe_bytes -= func_sibling->size;
 #endif
 #if CONFIG_THRESHOLD
-            if (wipestat) wipestat[func_id(func_sibling)].restore++;
+                if (wipestat) wipestat[func_id(func_sibling)].restore++;
 #endif
 
+            }
+        }
+    } else {
+        if (f->sibling_idx != FUNC_ID_INVALID) { // We have a sibling:
+            cte_function *func_sibling = cte_vector_get(&functions, f->sibling_idx);
+            if (!cte_func_loaded(func_sibling)) {
+                // cte_printf("-> load sibling: %s\n", func_sibling->name);
+                cte_modify_begin(func_sibling->vaddr, func_sibling->size);
+                cte_memcpy(func_sibling->vaddr, func_sibling->body, func_sibling->size);
+                cte_modify_end(func_sibling->vaddr, func_sibling->size);
+
+#if CONFIG_STAT
+                cte_stat.cur_wipe_count -= 1;
+                cte_stat.cur_wipe_bytes -= func_sibling->size;
+#endif
+#if CONFIG_THRESHOLD
+                if (wipestat) wipestat[func_id(func_sibling)].restore++;
+#endif
+
+            }
         }
     }
 #if CONFIG_THRESHOLD
@@ -1059,6 +1215,8 @@ int cte_init(int flags) {
     if (rc < 0)
         return rc;
 
+    cte_meta_assign();
+
     // Save the function bodies
     cte_function *it;
     for_each_cte_vector(&functions, it) {
@@ -1120,7 +1278,7 @@ int cte_init(int flags) {
         // Enlarge this function to include nops
         func->size += I;
 
-#ifdef CONFIG_STAT
+#if CONFIG_STAT
         cte_stat.function_bytes += func->size;
 #endif
 
@@ -1203,8 +1361,7 @@ int cte_wipe_rules(cte_rules *rules) {
 
     // Find caller function, as we do not wipe it
     void *retaddr = __builtin_extract_return_addr (__builtin_return_address (0));
-    cte_function * cf = bsearch(retaddr, functions.front, functions.length,
-                                sizeof(cte_function), cte_find_compare_in_function);
+    cte_function * cf = cte_find_containing_function(retaddr);
 
     for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_begin(t->vaddr, t->size);
@@ -1296,26 +1453,24 @@ static void cte_mark_loadable(bool *loadables, cte_function *function) {
     loadables[idx] = true;
     loadables[function->sibling_idx] = true;
 
-    if (!function->info_fn)
+    if (!function->meta)
         function = cte_vector_get(&functions, function->sibling_idx);
-    if (!function->info_fn)
+    if (!function->meta)
         return;
 
-    for (int i = 0; i < function->info_fn->calles_count; i++) {
-        void *callee = function->info_fn->callees[i];
-        cte_function *cf = bsearch(callee, functions.front, functions.length,
-                                   sizeof(cte_function),
-                                   cte_find_compare_function);
+    for (uint32_t i = 0; i < function->meta->callees_count; i++) {
+        void *callee = function->meta->callees[i];
+        cte_function *cf = cte_find_function(callee);
         cte_mark_loadable(loadables, cf);
     }
 }
 #endif
 
 void cte_dump_state(int fd, unsigned flags) {
-    
     cte_fdprintf(fd, "{\n");
 
 #define HEX32(x) ((x) >> 32), ((x) & 0xffffffff)
+#if CONFIG_STAT
     cte_fdprintf(fd, "  \"init_time\": 0x%08x%08x,\n", HEX32(cte_stat.init_time));
     cte_fdprintf(fd, "  \"restore_count\": %d,\n", cte_stat.restore_count);
     cte_fdprintf(fd, "  \"restore_time\": 0x%08x%08x,\n", HEX32(cte_stat.restore_time));
@@ -1329,6 +1484,7 @@ void cte_dump_state(int fd, unsigned flags) {
     cte_fdprintf(fd, "  \"function_bytes\": %d,\n", cte_stat.function_bytes);
     cte_fdprintf(fd, "  \"text_count\": %d,\n", texts.length);
     cte_fdprintf(fd, "  \"text_bytes\": %d,\n", cte_stat.text_bytes);
+#endif
 
     if (flags & CTE_DUMP_TEXTS) {
         cte_text *text;
@@ -1342,7 +1498,7 @@ void cte_dump_state(int fd, unsigned flags) {
 
     if (flags & CTE_DUMP_FUNCS) {
         bool *loadables = NULL;
-#ifdef CONFIG_STAT
+#if CONFIG_STAT
         if (flags & CTE_DUMP_FUNCS_LOADABLE) {
             loadables = mmap(NULL, functions.length, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1360,14 +1516,14 @@ void cte_dump_state(int fd, unsigned flags) {
                 if (f->text_idx == 6) {
                     /* cte_text *t = cte_vector_get(&texts, f->text_idx); */
                     /* cte_printf("INFO FN: %d  %s :: %s\n", (!!f->info_fn), t->filename, f->name); */
-                    if (f->info_fn)
+                    if (f->meta)
                         xyes++;
                     else
                         xno++;
                     if (f->sibling_idx != FUNC_ID_INVALID)
                         sibl++;
                 }
-                loadables[i] = !(f->info_fn || (sibling && sibling->info_fn));
+                loadables[i] = !(f->meta || (sibling && sibling->meta));
                 /* if (f->info_fn) { */
                 /*     loadables[i] ||= f->info_fn->flags | FLAG_ADDRESS_TAKEN; */
                 /* } */
@@ -1394,7 +1550,7 @@ void cte_dump_state(int fd, unsigned flags) {
 #if CONFIG_STAT
                          HEX32(cte_stat.restore_times[func_id(func)]),
 #else
-                         HEX32(-1),
+                         HEX32(-1UL),
 #endif
                          (loadables && loadables[func_id(func)]) ? "True" : "False"
                 );

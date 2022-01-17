@@ -141,7 +141,7 @@ void Cte::register_address_taken(Function &sender, addr_t source, addr_t target)
                   target, scn->name.c_str(), sender.name.c_str(),
                   source - sender.vaddr);
         } else {
-            warn("Ignore address taken of unknown location %lx at %s+0x%lx\n",
+            warn("Ignore address taken of unknown location 0x%lx at %s+0x%lx\n",
                  target, sender.name.c_str(), source - sender.vaddr);
             return;
         }
@@ -164,6 +164,13 @@ void Cte::register_indirect_call(Function &fn, addr_t source) {
     fn.has_indirect_calls = true;
 
     debug("Register indirect call to function at %s+0x%lx\n",
+          fn.name.c_str(), source - fn.vaddr);
+}
+
+void Cte::register_indirect_jump(Function &fn, addr_t source) {
+    fn.has_indirect_jumps = true;
+
+    debug("Register indirect jump to function at %s+0x%lx\n",
           fn.name.c_str(), source - fn.vaddr);
 }
 
@@ -196,38 +203,38 @@ void Cte::clear_visited() {
 }
 
 void Cte::propagate() {
-    clear_visited();
     for (auto &item : functions) {
         auto &fn = item.second;
-        propagate_jumpees(fn);
+        std::set<addr_t> gather;
+        clear_visited();
+        for (addr_t addr : fn.callees) {
+            auto &callee = functions.at(addr);
+            propagate_jumpees(callee, gather);
+        }
+        fn.callees.insert(gather.begin(), gather.end());
     }
 
-    clear_visited();
     for (auto &item : functions) {
         auto &fn = item.second;
+        clear_visited();
         propagate_siblings(fn);
     }
 
-    clear_visited();
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        propagate_indirect_jumps(fn);
+    }
 }
 
-void Cte::propagate_jumpees(Function &fn) {
+void Cte::propagate_jumpees(Function &fn, std::set<addr_t> &gather) {
     if (fn.visited)
         return;
     fn.visited = true;
 
-    std::vector<addr_t> jumpees(fn.jumpees.begin(), fn.jumpees.end());
-    fn.jumpees.clear();
-
-    for (addr_t addr : jumpees) {
-        fn.callees.insert(addr);
-
+    for (addr_t addr : fn.jumpees) {
+        gather.insert(addr);
         auto &jumpee = functions.at(addr);
-        propagate_jumpees(jumpee);
-
-        for (addr_t addr : jumpee.callees) {
-            fn.callees.insert(addr);
-        }
+        propagate_jumpees(jumpee, gather);
     }
 }
 
@@ -246,5 +253,22 @@ void Cte::propagate_siblings(Function &fn) {
         for (addr_t addr : sibling.callees) {
             fn.callees.insert(addr);
         }
+        for (addr_t addr : sibling.jumpees) {
+            fn.jumpees.insert(addr);
+        }
+    }
+}
+
+void Cte::propagate_indirect_jumps(Function &fn) {
+    for (addr_t addr : fn.callees) {
+        auto &callee = functions.at(addr);
+        if (callee.has_indirect_jumps)
+            fn.has_indirect_calls = true;
+    }
+
+    for (addr_t addr : fn.siblings) {
+        auto &sibling = functions.at(addr);
+        if (sibling.has_indirect_jumps)
+            fn.has_indirect_calls = true;
     }
 }

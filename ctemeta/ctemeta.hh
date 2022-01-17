@@ -18,6 +18,7 @@ struct Function {
     bool definition; // Currently, this is ->section.is_plt (if section != 0)
     bool address_taken;
     bool has_indirect_calls;
+    bool has_indirect_jumps;
     bool visited;    // Auxiliary flag for propagate functions
 
     std::set<addr_t> siblings;
@@ -27,12 +28,14 @@ struct Function {
 
     Function()
         : name(""), vaddr(0), size(0), section(0), definition(false),
-          address_taken(false), has_indirect_calls(false), visited(false) {}
+          address_taken(false), has_indirect_calls(false),
+          has_indirect_jumps(false), visited(false) {}
 
     Function(std::string name, addr_t vaddr, addr_t size, bool definition)
         : name(name), vaddr(vaddr), size(size), section(0),
           definition(definition), address_taken(false),
-          has_indirect_calls(false), visited(false) {}
+          has_indirect_calls(false), has_indirect_jumps(false),
+          visited(false) {}
 
     bool merge(Function &other);
 
@@ -88,14 +91,16 @@ struct Cte {
     void register_jump(Function &sender, addr_t source, addr_t target);
     void register_address_taken(Function &sender, addr_t source, addr_t target);
     void register_indirect_call(Function &fn, addr_t source);
+    void register_indirect_jump(Function &fn, addr_t source);
 
     Function *containing_function(addr_t addr);
     Section *containing_section(addr_t addr);
     bool in_text_segment(addr_t addr);
 
     void propagate();
-    void propagate_jumpees(Function &fn);
+    void propagate_jumpees(Function &fn, std::set<addr_t> &gather);
     void propagate_siblings(Function &fn);
+    void propagate_indirect_jumps(Function &fn);
     void clear_visited();
 
     std::vector<uint8_t> dump();
