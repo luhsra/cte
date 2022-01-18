@@ -367,24 +367,22 @@ static void cte_meta_assign(void) {
         cte_meta_function *start = cte_meta_get_functions(text->meta);
         cte_meta_function *end = start + text->meta->functions_count;
         for (cte_meta_function *meta = start; meta < end; meta++) {
-resolve_plt_again:
             void *org_addr = meta->vaddr;
-            if (cte_is_plt(meta->vaddr)) {
-                // FIXME: requires env BIND_NOW set
-                meta->vaddr = cte_decode_plt(meta->vaddr);
-            }
+            cte_function *fn;
+            do {
+                if (cte_is_plt(meta->vaddr))
+                    meta->vaddr = cte_decode_plt(meta->vaddr);
 
-            // Ignore VDSO functions
-            if (meta->vaddr >= vdso_start &&
-                meta->vaddr < vdso_start + vdso_size)
-                continue;
+                fn = cte_find_function(meta->vaddr);
 
-            cte_function *fn = cte_find_function(meta->vaddr);
+                // Multi-level plt indirections exist!
+            } while (cte_is_plt(meta->vaddr));
 
             if (!fn) {
-                // Multi-level plt indirections exist!
-                if (cte_is_plt(meta->vaddr))
-                    goto resolve_plt_again;
+                // Ignore VDSO functions
+                if (meta->vaddr >= vdso_start &&
+                    meta->vaddr < vdso_start + vdso_size)
+                    continue;
 
                 printf("Warning: Function not found: [%s] %p (<text>+%p) -> %p\n",
                        text->filename, org_addr,
