@@ -4,6 +4,9 @@
 #include <vector>
 #include <elf.h>
 #include <gelf.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
 #include "ctemeta.hh"
 #include "util.hh"
 
@@ -297,9 +300,13 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
     return vec;
 }
 
-Cte Cte::from_elf(int file) {
+Cte Cte::from_elf(const char *filename) {
     if (elf_version(EV_CURRENT) == EV_NONE)
         error_libelf();
+
+    int file = open(filename, O_RDONLY);
+    if (file < 0)
+        error(Error::IO, "IO error: %s: %s\n", filename, strerror(errno));
 
     Elf *elf = elf_begin(file, ELF_C_READ, NULL);
     if (!elf)
@@ -360,6 +367,7 @@ Cte Cte::from_elf(int file) {
     auto relocations = scan_relocations(elf, text_vaddr, text_vaddr + text_size);
 
     elf_end(elf);
+    close(file);
 
     return { text_vaddr, text_size, functions, sections, relocations };
 }

@@ -82,7 +82,7 @@ struct Cte {
         : text_vaddr(text_vaddr), text_size(text_size),
           functions(functions), sections(sections), relocations(relocations) {}
 
-    static Cte from_elf(int file);
+    static Cte from_elf(const char *filename);
 
     void analyze();
     void analyze_function(Function &fn);
