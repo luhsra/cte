@@ -37,11 +37,13 @@ void write_file(Cte &cte, const char *filename) {
 
 void print_usage() {
     std::cerr << "USAGE: ctemeta [options] <input file> [<output file>]\n\n"
-              << "OPTIONS:\n\n"
-              << "  -p            Print callgraph information\n\n"
+              << "OPTIONS:\n"
+              << "  -i            Print instructions\n"
+              << "  -c            Print callgraph information\n"
+              << "  -k            Keep sizes: Do not aggressively enlarge functions\n"
               << "  -l <level>    Set log level to <level>\n"
               << "                <level>: none, error, warn, info, debug\n"
-              << "                The default log level is 'info'\n\n"
+              << "                The default log level is 'info'\n"
               << "  -h            Print help message\n\n";
 }
 
@@ -51,7 +53,7 @@ int main(int argc, char *argv[]) {
     bool print_cgraph = false;
 
     while (true) {
-        int result = getopt(argc, argv, "pl:h");
+        int result = getopt(argc, argv, "ickl:h");
         if (result == -1)
             break;
         switch (result) {
@@ -59,8 +61,14 @@ int main(int argc, char *argv[]) {
         case ':':
             print_usage();
             return 255;
-        case 'p':
+        case 'i':
+            dump_instructions = true;
+            break;
+        case 'c':
             print_cgraph = true;
+            break;
+        case 'k':
+            keep_sizes = true;
             break;
         case 'l': {
             std::string optstr = optarg;

@@ -10,6 +10,8 @@
 #include "ctemeta.hh"
 #include "util.hh"
 
+bool keep_sizes = false;
+
 static void error_libelf(void) {
     error(Error::ELF, "libelf: %s\n", elf_errmsg( -1));
 }
@@ -72,6 +74,35 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
     return map;
 }
 
+static void enlarge_body(Section &sec, Function &fn, Function *next_fn) {
+    if (fn.definition) {
+        // Enlarge to the start of the nex function
+        addr_t new_size = (next_fn) ? (next_fn->vaddr - fn.vaddr) : fn.size;
+
+        // New size must not exceed the section boundary,
+        // or if there is no next_fn, enlarge to the section boundary
+        if ((fn.vaddr + new_size > sec.vaddr + sec.size) || !next_fn)
+            new_size = sec.vaddr + sec.size - fn.vaddr;
+
+        if (new_size < fn.size)
+            error(Error::ELF, "ELF: Enlarge function body: %s: "
+                  "Corrupt sizes. This should not happen.", fn.str().c_str());
+
+        if (fn.size != 0 && new_size >= fn.size + 32)
+            warn("ELF: Enlarge function body: %s: "
+                 "Sanity warning: old size: 0x%lx, new size: 0x%lx\n",
+                 fn.str().c_str(), fn.size, new_size);
+
+        if (new_size > fn.size)
+            debug("ELF: Enlarge function body: %s: "
+                  "old size: 0x%lx, new size: 0x%lx\n",
+                  fn.str().c_str(), fn.size, new_size);
+
+        // Finally, assign new size
+        fn.size = new_size;
+    }
+}
+
 static std::map<addr_t, Section>
 scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
     std::map<addr_t, Section> map;
@@ -115,27 +146,27 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
             while (it != end) {
                 Function &fn = it->second;
                 it++;
+                Function *fn_next = (it != functions.end()) ? &it->second : nullptr;
+
                 addr_t border = (it != end) ? it->second.vaddr : vaddr_end;
                 if (fn.vaddr + fn.size > border)
                     error(Error::ELF,
                           "Function %s exceeds next function or section end\n",
                           fn.str().c_str());
-                fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
+
                 fn.section = vaddr;
                 fn.definition = !is_plt;
+                if (!keep_sizes)
+                    enlarge_body(map.at(vaddr), fn, fn_next);
+                fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
             }
         }
     }
 
-    // Finally, scan all functions and warn about zero-sized functions
-    // TODO: We could extend the functions to the next function start.
-    //       Maybe, with some sanity-checks (size, ...)
     for (auto &item : functions) {
-        auto &fn = item.second;
-        if (fn.size == 0 && fn.definition) {
-            warn("ELF: Zero-sized symbol: %s (0x%lx)\n",
-                 fn.name.c_str(), fn.vaddr);
-        }
+        Function &fn = item.second;
+        if (fn.definition && fn.size == 0)
+            warn("ELF: Zero-sized function: %s\n", fn.str().c_str());
     }
 
     return map;

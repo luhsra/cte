@@ -75,6 +75,7 @@ std::vector<uint8_t> Cte::dump() {
         auto *mfn = reinterpret_cast<cte_meta_function*>(buf.data() + p_fn);
         *mfn = (cte_meta_function) {
             .vaddr = (void*)fn.vaddr,
+            .size = fn.size,
             .callees = (void**)p_callees,
             .jumpees = (void**)p_jumpees,
             .siblings = (void**)p_siblings,

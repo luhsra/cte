@@ -12,6 +12,7 @@ static const uint32_t FLAG_VISITED = (1 << 31);
 
 typedef struct cte_meta_function {
     void *vaddr;
+    size_t size;
     void **callees;
     void **jumpees;
     void **siblings;

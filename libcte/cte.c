@@ -402,6 +402,10 @@ resolve_plt_again:
             } else {
                 fn->meta = meta;
             }
+            if (meta->flags & FLAG_DEFINITION) {
+                // Update size according to meta info
+                fn->size = meta->size;
+            }
         }
     }
 
