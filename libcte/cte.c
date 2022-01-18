@@ -479,6 +479,45 @@ static void cte_meta_assign(void) {
             cte_die("Meta: %s: unmap failed\n", text->filename);
         text->meta = NULL;
     }
+
+#if CONFIG_STAT
+    // Output statistics
+    uint64_t c_total_fns = functions.length;
+    uint64_t c_meta_fns = 0;
+    uint64_t c_address_taken_fns = 0;
+    uint64_t c_indirect_calls_fns = 0;
+    uint64_t c_total_callees = 0;
+    uint64_t c_total_siblings = 0;
+    uint64_t c_max_callees = 0;
+    uint64_t c_max_siblings = 0;
+    cte_function *fn_max_callees = NULL;
+    cte_function *fn_max_siblings = NULL;
+    for_each_cte_vector(&functions, fn) {
+        if (!fn->meta)
+            continue;
+        c_meta_fns++;
+        c_address_taken_fns += (fn->meta->flags & FLAG_ADDRESS_TAKEN) ? 1 : 0;
+        c_indirect_calls_fns += (fn->meta->flags & FLAG_INDIRECT_CALLS) ? 1 : 0;
+        c_total_callees += fn->meta->callees_count;
+        c_total_siblings += fn->meta->siblings_count;
+        if (fn->meta->callees_count > c_max_callees) {
+            c_max_callees = fn->meta->callees_count;
+            fn_max_callees = fn;
+        }
+        if (fn->meta->siblings_count > c_max_siblings) {
+            c_max_siblings = fn->meta->siblings_count;
+            fn_max_siblings = fn;
+        }
+    }
+    printf("Meta: total_fns: %lu\n", c_total_fns);
+    printf("Meta: meta_fns:  %lu\n", c_meta_fns);
+    printf("Meta: address_taken_fns:  %lu\n", c_address_taken_fns);
+    printf("Meta: indirect_calls_fns: %lu\n", c_indirect_calls_fns);
+    printf("Meta: avg_callees:  %f\n", (float)c_total_callees / c_meta_fns);
+    printf("Meta: avg_siblings: %f\n", (float)c_total_siblings / c_meta_fns);
+    printf("Meta: max_callees:  %lu (%s)\n", c_max_callees, fn_max_callees->name);
+    printf("Meta: max_siblings: %lu (%s)\n", c_max_siblings, fn_max_siblings->name);
+#endif
 }
 
 static
