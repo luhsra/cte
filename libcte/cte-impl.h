@@ -34,7 +34,6 @@ struct cte_function {
 typedef struct cte_function cte_function;
 
 struct cte_plt {
-    uint32_t text_idx; // From which library
     void *vaddr;
     size_t size;
 };

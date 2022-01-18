@@ -32,6 +32,9 @@ CTE_SEALED static size_t bodies_size;
 
 CTE_SEALED static bool strict_callgraph;
 
+static void *vdso_start = NULL;
+static size_t vdso_size = 0;
+
 static void *cte_sealed_sec_vaddr = NULL;
 static size_t cte_sealed_sec_size = 0;
 
@@ -364,17 +367,28 @@ static void cte_meta_assign(void) {
         cte_meta_function *start = cte_meta_get_functions(text->meta);
         cte_meta_function *end = start + text->meta->functions_count;
         for (cte_meta_function *meta = start; meta < end; meta++) {
+resolve_plt_again:
             void *org_addr = meta->vaddr;
             if (cte_is_plt(meta->vaddr)) {
                 // FIXME: requires env BIND_NOW set
                 meta->vaddr = cte_decode_plt(meta->vaddr);
             }
 
+            // Ignore VDSO functions
+            if (meta->vaddr >= vdso_start &&
+                meta->vaddr < vdso_start + vdso_size)
+                continue;
+
             cte_function *fn = cte_find_function(meta->vaddr);
 
             if (!fn) {
-                printf("Warning: Function not found: %p (%p) [%s]\n",
-                       meta->vaddr, org_addr, text->filename);
+                // Multi-level plt indirections exist!
+                if (cte_is_plt(meta->vaddr))
+                    goto resolve_plt_again;
+
+                printf("Warning: Function not found: [%s] %p (<text>+%p) -> %p\n",
+                       text->filename, org_addr,
+                       (void*)(org_addr - text->vaddr), meta->vaddr);
                 continue;
             }
 
@@ -393,8 +407,13 @@ static void cte_meta_assign(void) {
 
     // Check if all fns have a .meta member and its definition flag set
     for_each_cte_vector(&functions, fn) {
-        if (!fn->meta || !(fn->meta->flags & FLAG_DEFINITION))
-            printf("Warning: Meta info not found or insufficient: %s\n", fn->name);
+        cte_text *text = cte_vector_get(&texts, fn->text_idx);
+        if (!fn->meta)
+            printf("Warning: Meta info not found: [%s] %s\n",
+                   text->filename, fn->name);
+        else if (!(fn->meta->flags & FLAG_DEFINITION))
+            printf("Warning: Meta info function definition not found: [%s] %s\n",
+                   text->filename, fn->name);
     }
 
     // Propagate callees and copy meta objects
@@ -554,15 +573,24 @@ cte_elf_scan_symbols(Elf *elf, cte_text * text, ElfW(Addr) dlpi_addr) {
                 gelf_getsym(data, i, &sym);
                 char *name = strdup(elf_strptr(elf, shdr.sh_link, sym.st_name));
 
-                // Only functions
-                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC) continue;
-                if (sym.st_size == 0) continue;
+                // Only defined functions
+                if (sym.st_shndx == SHN_UNDEF)
+                    continue;
+                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                    GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
+                    continue;
+
+                void *vaddr = (void*)((uintptr_t)dlpi_addr + sym.st_value);
+
+                // Ignore plt entries
+                if (cte_is_plt(vaddr))
+                    continue;
 
                 cte_function f = {
                     .text_idx  = text - (cte_text *)texts.front,
                     .name      = name,
                     .size      = sym.st_size,
-                    .vaddr     = (void*)((uintptr_t)dlpi_addr + sym.st_value),
+                    .vaddr     = vaddr,
                     .body      = NULL,
                     .meta      = NULL,
                     .essential = false,
@@ -675,8 +703,29 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     if (info->dlpi_name[0] != '\0')
         filename = (char*)info->dlpi_name;
 
-    if (!strcmp(filename, "linux-vdso.so.1"))
+    // Find the text segment
+    void *text_vaddr = NULL;
+    size_t text_size = 0;
+    ElfW(Off) text_offset = 0;
+    for (int j = 0; j < info->dlpi_phnum; j++) {
+        const ElfW(Phdr) *phdr = &info->dlpi_phdr[j];
+        if (phdr->p_type != PT_LOAD)
+            continue;
+        if (phdr->p_flags & PF_X) {
+            if (text_vaddr)
+                return CTE_ERROR_FORMAT;
+            text_vaddr = cte_get_vaddr(info, phdr->p_vaddr);
+            text_size = phdr->p_memsz;
+            text_offset = phdr->p_offset;
+            printf("segment: [%s] %p, %lu\n", filename, text_vaddr, text_size);
+        }
+    }
+
+    if (!strcmp(filename, "linux-vdso.so.1")) {
+        vdso_start = text_vaddr;
+        vdso_size = text_size;
         return 0;
+    }
 
     // Open the object file
     int fd = open(filename, O_RDONLY);
@@ -704,26 +753,8 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
 
     Elf_Scn *section;
 
-    // Find the text segment
-    void *text_vaddr = NULL;
-    size_t text_size = 0;
-    ElfW(Off) text_offset = 0;
-    for (int j = 0; j < info->dlpi_phnum; j++) {
-        const ElfW(Phdr) *phdr = &info->dlpi_phdr[j];
-        if (phdr->p_type != PT_LOAD) continue;
-        if (phdr->p_flags & PF_X) {
-            if (text_vaddr)
-                return CTE_ERROR_FORMAT;
-            text_vaddr = cte_get_vaddr(info, phdr->p_vaddr);
-            text_size = phdr->p_memsz;
-            text_offset = phdr->p_offset;
-            printf("segment: [%s] %p, %lu\n", filename, text_vaddr, text_size);
-        }
-    }
-
     void *essential_sec_vaddr = NULL;
     size_t essential_sec_size = 0;
-    cte_plt *plt = NULL;
 
     section = NULL;
     while ((section = elf_nextscn(elf, section)) != NULL) {
@@ -744,10 +775,9 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             cte_sealed_sec_vaddr = cte_get_vaddr(info, shdr.sh_addr);
             cte_sealed_sec_size = shdr.sh_size;
         }
-        if (strcmp(name, ".plt") == 0) {
-            plt = cte_vector_push(&plts);
+        if (strcmp(name, ".plt") == 0 || strcmp(name, ".plt.got") == 0) {
+            cte_plt *plt = cte_vector_push(&plts);
             *plt = (cte_plt) {
-                .text_idx = 0, // Gets set later
                 .vaddr = cte_get_vaddr(info, shdr.sh_addr),
                 .size = shdr.sh_size,
             };
@@ -777,9 +807,6 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     if(!text->filename)
         cte_die("strdup failed");
 
-    if (plt)
-        plt->text_idx = text_idx;
-
     // Collect ELF symbol info
     cte_elf_scan_symbols(elf, text, info->dlpi_addr);
 
@@ -796,7 +823,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
           sizeof(cte_function),
           cte_sort_compare_function);
 
-    // Step 2: Mark essential functions, identify duplicates
+    // Step 2: Mark essential functions, identify duplicates, identify plt functions
     size_t count = 0;
     cte_function *function = NULL, *it;
     for_each_cte_vector(&functions, it) {
@@ -807,6 +834,13 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
 
         if ((uint8_t*)it->vaddr + it->size > (uint8_t*)text->vaddr + text->size)
             cte_die("function exceeds text segment: %s\n", it->name);
+
+        // Identify plt entry
+        if (cte_is_plt(it->vaddr)) {
+            // Zero out
+            it->vaddr = NULL;
+            continue;
+        }
 
         // Identify Duplicates
         if (!function || function->vaddr != it->vaddr) {
@@ -819,7 +853,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             continue;
         }
 
-        // Function is an essential sections?
+        // Function is an essential function?
         if (essential_sec_vaddr) {
             function->essential |= (it->vaddr >= essential_sec_vaddr) &&
                 ((uint8_t*)it->vaddr < (uint8_t*)essential_sec_vaddr + essential_sec_size);
@@ -955,20 +989,7 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
             if (cd) {
                 cte_printf("  %p: %s\n", callee, cd->name);
             } else {
-                cte_plt *p, *plt = NULL;
-                for_each_cte_vector(&plts, p) {
-                    if (callee >= p->vaddr && callee < (p->vaddr + p->size)) {
-                        plt = p;
-                        break;
-                    }
-                }
-                if (plt) {
-                    cte_text *text = cte_vector_get(&texts, plt->text_idx);
-                    cte_printf("  %p: .plt+%p [%s]\n", callee,
-                               callee - plt->vaddr, text->filename);
-                } else {
-                    cte_printf("  %p: ??\n", callee);
-                }
+                cte_printf("  %p: ??\n", callee);
             }
         }
     }

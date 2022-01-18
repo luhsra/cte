@@ -39,13 +39,17 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                 gelf_getsym(data, i, &sym);
                 std::string name = elf_strptr(elf, shdr.sh_link, sym.st_name);
 
-                // Only functions
+                // Only defined functions
+                if (sym.st_shndx == SHN_UNDEF)
+                    continue;
                 if (sym.st_value < text_start || sym.st_value >= text_end)
                     continue;
                 if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
-                    GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
-                    warn("ELF: Found non function symbol in text: %s\n",
+                    GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC) {
+                    warn("ELF: Ignore non-function symbol in text: %s\n",
                          name.c_str());
+                    continue;
+                }
 
                 addr_t vaddr = sym.st_value;
                 addr_t size = sym.st_size;
