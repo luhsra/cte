@@ -28,6 +28,7 @@ struct cte_function {
     void *body;
     cte_meta_function *meta;
     bool essential;
+    // FIXME: Currently used if not strict_callgraph, should be removed.
     uint32_t sibling_idx;
 };
 typedef struct cte_function cte_function;

@@ -214,21 +214,25 @@ static bool cte_is_plt(void *addr) {
     return false;
 }
 
-static cte_meta_header *cte_meta_init(void *data, size_t size, void *load_addr) {
+static cte_meta_header *cte_meta_init(void *data, size_t size,
+                                      void *load_addr, char *filename) {
     if (size < sizeof(cte_meta_header))
-        cte_die("Invalid meta info\n");
+        cte_die("Invalid meta info: %s\n", filename);
 
     cte_meta_header *header = data;
     if (strcmp(header->magic, "CTE"))
-        cte_die("Invalid meta info\n");
+        cte_die("Invalid meta info: %s\n", filename);
 
     if (header->version != CTE_VERSION)
-        cte_die("Unexpected meta info version: %u (expected: %u)",
-                header->version, CTE_VERSION);
+        cte_die("%s: Unexpected meta info version: %u (expected: %u)",
+                filename, header->version, CTE_VERSION);
+
+    if (size != header->size)
+        cte_die("Corrupt meta info: %s\n", filename);
 
     if (size < (sizeof(cte_meta_header) +
                 header->functions_count * sizeof(cte_meta_function)))
-        cte_die("Corrupt meta info\n");
+        cte_die("Corrupt meta info: %s\n", filename);
 
     cte_meta_function *fn_start = (void*)((uint8_t*)data +
                                           sizeof(cte_meta_header));
@@ -286,7 +290,7 @@ static cte_meta_header *cte_meta_load(char *objname, void *load_addr) {
         cte_die("mmap failed: %s\n", filename);
     close(fd);
 
-    return cte_meta_init(data, size, load_addr);
+    return cte_meta_init(data, size, load_addr, filename);
 }
 
 typedef struct cte_pset {
@@ -368,16 +372,11 @@ static void cte_meta_assign(void) {
 
             cte_function *fn = cte_find_function(meta->vaddr);
 
-            /* if (!fn) */
-            /*     cte_die("meta: function not found: %p / %p\n", */
-            /*             meta->vaddr, org_addr - text->vaddr); */
-            ///// FIXME
             if (!fn) {
-                printf("Warning: Meta: function not found: %p / %p [%s]\n",
+                printf("Warning: Function not found: %p (%p) [%s]\n",
                        meta->vaddr, org_addr, text->filename);
                 continue;
             }
-            ///// FIXME
 
             if (fn->meta) {
                 if (fn->meta->flags & FLAG_DEFINITION) {
@@ -392,7 +391,11 @@ static void cte_meta_assign(void) {
         }
     }
 
-    // TODO Check if all meta fns have definition flag set
+    // Check if all fns have a .meta member and its definition flag set
+    for_each_cte_vector(&functions, fn) {
+        if (!fn->meta || !(fn->meta->flags & FLAG_DEFINITION))
+            printf("Warning: Meta info not found or insufficient: %s\n", fn->name);
+    }
 
     // Propagate callees and copy meta objects
     uint8_t *data = NULL;
@@ -468,7 +471,7 @@ static void cte_meta_assign(void) {
     if (mprotect(data, data_capacity, PROT_READ) == -1)
         cte_die("Meta: %s: sealing failed\n", text->filename);
 
-    // Unmap meta files
+    // Unmap original meta files
     for_each_cte_vector(&texts, text) {
         if (!text->meta)
             continue;
@@ -713,7 +716,11 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     }
 
     // Init meta data
-    cte_meta_header *meta = cte_meta_load(filename, (void*)info->dlpi_addr);
+    cte_meta_header *meta;
+    if (strict_callgraph)
+        meta = cte_meta_load(filename, (void*)info->dlpi_addr);
+    else
+        meta = NULL;
 
     cte_text *text = cte_vector_push(&texts);
     uint32_t text_idx = (text - (cte_text *)texts.front);
@@ -1215,7 +1222,8 @@ int cte_init(int flags) {
     if (rc < 0)
         return rc;
 
-    cte_meta_assign();
+    if (strict_callgraph)
+        cte_meta_assign();
 
     // Save the function bodies
     cte_function *it;
