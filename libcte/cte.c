@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stddef.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -172,6 +173,44 @@ static int cte_find_compare_in_function(const void *post_call_addr,
     else
         return 1;
 }
+
+
+CTE_ESSENTIAL
+static
+void cte_implant_init(cte_implant *ptr, unsigned _func_idx) {
+    // If there cte_restore is close enough, we call it directly
+    ptrdiff_t diff = (void*) cte_restore_entry - ((void*)ptr + 12);
+    if (INT_MIN < diff  && diff < INT_MAX) {
+        for (unsigned i = 0; i < 7; i++)
+            ptr->call.nop[i] = 0x90; // nop
+        ptr->call.call[0] = 0xe8;
+        ptr->call.offset  = diff;
+    } else {
+        ptr->icall.mov[0] = 0x48; /* 64bit prefix */
+        ptr->icall.mov[1] = 0xb8; /* absmov to %rax  */
+        ptr->icall.mov_imm = (uint64_t)cte_restore_entry;
+        ptr->icall.icall[0] = 0xff; /* call *%rax */
+        ptr->icall.icall[1] = 0xd0;
+    }
+    ptr->func_idx = (_func_idx);
+
+}
+
+CTE_ESSENTIAL
+static
+bool cte_implant_valid(cte_implant *ptr) {
+    // Is it a direct call?
+    if (ptr && ptr->call.call[0] == 0xe8 &&
+        ptr->call.offset == (void*) cte_restore_entry - ((void*)ptr + 12))
+        return true;
+    // Is it an indirect call?
+    if (ptr && ptr->icall.mov[0] == 0x48 && ptr->icall.mov[1] == 0xb8 && ptr->icall.mov_imm == (uint64_t)cte_restore_entry
+        && ptr->icall.icall[0] == 0xff && ptr->icall.icall[1] == 0xd0)
+        return true;
+
+    return false;
+}
+
 
 CTE_ESSENTIAL
 static cte_function *cte_find_function(void* addr) {
@@ -1027,6 +1066,7 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
     unsigned char *b = post_call_addr;
     bool indirect = false;
     bool direct = false;
+    bool signal = false;
 
 #define EXT_MOD(ob) ((ob >> 6) & 0x03)
 #define EXT_REG(ob) ((ob >> 3) & 0x07)
@@ -1055,6 +1095,13 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
         (EXT_MOD(b[-6]) == 2 && EXT_RM(b[-6]) == 4)) {
         indirect = true;
     }
+    if (/* mov 0xf, rax */
+           b[0] == 0x48 && b[1] == 0xc7 && b[2] == 0xc0 && b[3] == 0x0f
+        && b[4] == 0    && b[5] == 0    && b[6] == 0
+        /* syscall */
+        && b[7] == 0xf  && b[8] == 0x05) {
+        signal = true;
+    }
     // GCC does not use far indirect calls (EXT_MOD=3)
 
     // direct call
@@ -1064,7 +1111,7 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
 
     if (indirect && direct)
         return CALLSITE_TYPE_DIRECT_OR_INDIRECT;
-    if (indirect)
+    if (indirect || signal)
         return CALLSITE_TYPE_INDIRECT;
     if (direct)
         return CALLSITE_TYPE_DIRECT;
@@ -1123,6 +1170,7 @@ int cte_restore(void *addr, void *post_call_addr) {
     if(!f)
         cte_die("Could not find function with id %d (max_id=%d)\n",
                 implant->func_idx, functions.length);
+
 
     /*
     cte_function *f2 = cte_find_function(implant);
@@ -1253,6 +1301,11 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     if (policy == CTE_LOAD)
         cte_die("Policy CTE_LOAD is not yet implemented");
 
+    // CTE_WIPE|CTE_KILL: Wipe the whole function body
+    cte_memset(fn->vaddr,
+               0xcc, // int3 int3 int3...
+               fn->size);
+
     if (policy == CTE_WIPE) {
         if (fn->size < sizeof(cte_implant)) {
             cte_text *text = cte_vector_get(&texts, fn->text_idx);
@@ -1263,16 +1316,6 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
         }
         // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
         cte_implant_init(implant, func_id(fn));
-
-        // Wipe the rest of the function body
-        cte_memset(fn->vaddr + sizeof(cte_implant),
-                   0xcc, // int3 int3 int3...
-                   fn->size  - sizeof(cte_implant));
-    } else if (policy == CTE_KILL) {
-        // Wipe the whole function body
-        cte_memset(fn->vaddr,
-                   0xcc, // int3 int3 int3...
-                   fn->size);
     }
 
     return 1;
