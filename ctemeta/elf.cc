@@ -4,8 +4,13 @@
 #include <vector>
 #include <elf.h>
 #include <gelf.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
 #include "ctemeta.hh"
 #include "util.hh"
+
+bool keep_sizes = false;
 
 static void error_libelf(void) {
     error(Error::ELF, "libelf: %s\n", elf_errmsg( -1));
@@ -36,13 +41,17 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                 gelf_getsym(data, i, &sym);
                 std::string name = elf_strptr(elf, shdr.sh_link, sym.st_name);
 
-                // Only functions
+                // Only defined functions
+                if (sym.st_shndx == SHN_UNDEF)
+                    continue;
                 if (sym.st_value < text_start || sym.st_value >= text_end)
                     continue;
                 if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
-                    GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
-                    warn("ELF: Found non function symbol in text: %s\n",
+                    GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC) {
+                    warn("ELF: Ignore non-function symbol in text: %s\n",
                          name.c_str());
+                    continue;
+                }
 
                 addr_t vaddr = sym.st_value;
                 addr_t size = sym.st_size;
@@ -63,6 +72,35 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
         error(Error::ELF, "Symbol table not found");
 
     return map;
+}
+
+static void enlarge_body(Section &sec, Function &fn, Function *next_fn) {
+    if (fn.definition) {
+        // Enlarge to the start of the nex function
+        addr_t new_size = (next_fn) ? (next_fn->vaddr - fn.vaddr) : fn.size;
+
+        // New size must not exceed the section boundary,
+        // or if there is no next_fn, enlarge to the section boundary
+        if ((fn.vaddr + new_size > sec.vaddr + sec.size) || !next_fn)
+            new_size = sec.vaddr + sec.size - fn.vaddr;
+
+        if (new_size < fn.size)
+            error(Error::ELF, "ELF: Enlarge function body: %s: "
+                  "Corrupt sizes. This should not happen.", fn.str().c_str());
+
+        if (fn.size != 0 && new_size >= fn.size + 32)
+            warn("ELF: Enlarge function body: %s: "
+                 "Sanity warning: old size: 0x%lx, new size: 0x%lx\n",
+                 fn.str().c_str(), fn.size, new_size);
+
+        if (new_size > fn.size)
+            debug("ELF: Enlarge function body: %s: "
+                  "old size: 0x%lx, new size: 0x%lx\n",
+                  fn.str().c_str(), fn.size, new_size);
+
+        // Finally, assign new size
+        fn.size = new_size;
+    }
 }
 
 static std::map<addr_t, Section>
@@ -108,27 +146,27 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
             while (it != end) {
                 Function &fn = it->second;
                 it++;
+                Function *fn_next = (it != functions.end()) ? &it->second : nullptr;
+
                 addr_t border = (it != end) ? it->second.vaddr : vaddr_end;
                 if (fn.vaddr + fn.size > border)
                     error(Error::ELF,
                           "Function %s exceeds next function or section end\n",
                           fn.str().c_str());
-                fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
+
                 fn.section = vaddr;
                 fn.definition = !is_plt;
+                if (!keep_sizes)
+                    enlarge_body(map.at(vaddr), fn, fn_next);
+                fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
             }
         }
     }
 
-    // Finally, scan all functions and warn about zero-sized functions
-    // TODO: We could extend the functions to the next function start.
-    //       Maybe, with some sanity-checks (size, ...)
     for (auto &item : functions) {
-        auto &fn = item.second;
-        if (fn.size == 0 && fn.definition) {
-            warn("ELF: Zero-sized symbol: %s (0x%lx)\n",
-                 fn.name.c_str(), fn.vaddr);
-        }
+        Function &fn = item.second;
+        if (fn.definition && fn.size == 0)
+            warn("ELF: Zero-sized function: %s\n", fn.str().c_str());
     }
 
     return map;
@@ -241,8 +279,7 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                         // FIXME: Handling this would require rearranging some
                         //        data structures
                         if (rel_type == R_X86_64_64)
-                            error(Error::ELF,
-                                  "Direct reference to an undefined function: %s\n",
+                            warn("Direct reference to an undefined function: %s\n",
                                   name);
 
                         continue;
@@ -298,9 +335,13 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
     return vec;
 }
 
-Cte Cte::from_elf(int file) {
+Cte Cte::from_elf(const char *filename) {
     if (elf_version(EV_CURRENT) == EV_NONE)
         error_libelf();
+
+    int file = open(filename, O_RDONLY);
+    if (file < 0)
+        error(Error::IO, "IO error: %s: %s\n", filename, strerror(errno));
 
     Elf *elf = elf_begin(file, ELF_C_READ, NULL);
     if (!elf)
@@ -361,6 +402,7 @@ Cte Cte::from_elf(int file) {
     auto relocations = scan_relocations(elf, text_vaddr, text_vaddr + text_size);
 
     elf_end(elf);
+    close(file);
 
     return { text_vaddr, text_size, functions, sections, relocations };
 }

@@ -9,7 +9,7 @@ ZYDIS_SRC = zydis
 ZYDIS_BUILD = zydis/build
 ZYDIS_DIST = zydis-dist
 CXXFLAGS += -I$(ZYDIS_DIST)/include
-LDFLAGS += -L$(ZYDIS_DIST)/lib
+LDFLAGS += -L$(ZYDIS_DIST)/lib -L$(ZYDIS_DIST)/lib64
 
 .PHONY: all clean
 

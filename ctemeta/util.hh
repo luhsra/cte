@@ -16,6 +16,7 @@ enum class LogLevel {
 
 extern LogLevel log_level;
 extern bool dump_instructions;
+extern bool keep_sizes;
 
 __attribute__((format(printf, 2, 3)))
 void error(Error rc, const char *fmt, ...);

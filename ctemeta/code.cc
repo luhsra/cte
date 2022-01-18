@@ -55,11 +55,14 @@ void Cte::analyze_function(Function &fn) {
                         else
                             register_jump(fn, pc, target);
                     } else {
-                        register_indirect_call(fn, pc);
+                        if (category == ZYDIS_CATEGORY_CALL)
+                            register_indirect_call(fn, pc);
+                        else
+                            register_indirect_jump(fn, pc);
                     }
                 }
             } else {
-                warn("%s+0x%lx: unrecognized branch instruction",
+                warn("%s+0x%lx: unrecognized branch instruction\n",
                      fn.name.c_str(), pc - fn.vaddr);
             }
 
