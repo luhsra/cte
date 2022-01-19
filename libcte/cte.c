@@ -1124,20 +1124,15 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
 
 CTE_ESSENTIAL
 static bool cte_check_call(void* called_addr, cte_function *callee,
-                               cte_function *caller) {
-    if (!caller->meta) {
-        // FIXME
-        cte_printf("CALLER NO META: %s\n", caller->name);
-        return true;
+                           cte_function *caller, cte_callsite_type type) {
+    if ((strict_callgraph && !caller->meta) ||
+        !(caller->meta->flags & FLAG_DEFINITION)) {
+        cte_printf("Invalid caller meta info: %s\n", caller->name);
+        return false;
     }
 
-    if (!(caller->meta->flags & FLAG_DEFINITION)) {
-        // FIXME
-        cte_printf("CALLER NO DEFINITION: %s\n", caller->name);
-        return true;
-    }
-
-    if ((caller->meta->flags & FLAG_INDIRECT_CALLS) &&
+    if ((type == CALLSITE_TYPE_INDIRECT || type == CALLSITE_TYPE_DIRECT_OR_INDIRECT) &&
+        (caller->meta->flags & FLAG_INDIRECT_CALLS) &&
         (callee->meta && (callee->meta->flags & FLAG_ADDRESS_TAKEN))) {
         return true;
     }
@@ -1198,30 +1193,21 @@ int cte_restore(void *addr, void *post_call_addr) {
         }
     }
 
-    if (!strict_callgraph)
-        goto allowed;
+    if (strict_callgraph) {
+        // Find the caller
+        cte_function *cf = cte_find_containing_function(post_call_addr);
+        if (!cf) {
+            cte_debug_restore(addr, post_call_addr, f, cf);
+            cte_die("Caller not found\n");
+        }
 
-    /* if (type != CALLSITE_TYPE_DIRECT) {  // TODO: get rid of invalid callsites */
-    /*     // The function can be inserted if its address is taken */
-    /*     if (f->meta && (f->meta->flags & FLAG_ADDRESS_TAKEN)) */
-    /*         goto allowed; */
-    /* } */
-
-    // Find the caller
-    cte_function *cf = cte_find_containing_function(post_call_addr);
-    if (!cf) {
-        cte_debug_restore(addr, post_call_addr, f, cf);
-        cte_die("Caller not found\n");
+        if (!cte_check_call(addr, f, cf, type)) {
+            // Failed to find the callee
+            cte_debug_restore(addr, post_call_addr, f, cf);
+            cte_die("Unrecognized callee\n");
+        }
     }
 
-    if (cte_check_call(addr, f, cf))
-        goto allowed;
-
-    // Failed to find the callee
-    cte_debug_restore(addr, post_call_addr, f, cf);
-    cte_die("Unrecognized callee\n");
-
-    allowed:
     // cte_printf("-> load: %s\n", f->name);
     // Load the called function
 
