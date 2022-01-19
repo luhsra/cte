@@ -1302,11 +1302,11 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
         cte_die("Policy CTE_LOAD is not yet implemented");
 
     // CTE_WIPE|CTE_KILL: Wipe the whole function body
-    cte_memset(fn->vaddr,
-               0xcc, // int3 int3 int3...
-               fn->size);
-
-    if (policy == CTE_WIPE) {
+    if (policy == CTE_KILL) {
+        cte_memset(fn->vaddr,
+                   0xcc, // int3 int3 int3...
+                   fn->size);
+    } else if (policy == CTE_WIPE ) {
         if (fn->size < sizeof(cte_implant)) {
             cte_text *text = cte_vector_get(&texts, fn->text_idx);
             if(!text) cte_die("idiot");
@@ -1314,6 +1314,9 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
                       text->filename, fn->name, fn->size, sizeof(cte_implant));
             return 0;
         }
+        cte_memset(fn->vaddr,
+                   0xcc, // int3 int3 int3...
+                   fn->size);
         // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
         cte_implant_init(implant, func_id(fn));
     }
