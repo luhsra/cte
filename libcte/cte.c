@@ -32,6 +32,8 @@ CTE_SEALED static void *bodies;         // stores function bodies
 CTE_SEALED static size_t bodies_size;
 
 CTE_SEALED static bool strict_callgraph;
+CTE_SEALED static bool strict_ctemeta;
+
 
 static void *vdso_start = NULL;
 static size_t vdso_size = 0;
@@ -834,6 +836,10 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     else
         meta = NULL;
 
+    if (strict_ctemeta && meta == NULL ) {
+        cte_die("CTE_STRICT_META: No meta file for %s", filename);
+    }
+
     cte_text *text = cte_vector_push(&texts);
     uint32_t text_idx = (text - (cte_text *)texts.front);
     *text = (cte_text) {
@@ -1192,18 +1198,18 @@ int cte_restore(void *addr, void *post_call_addr) {
         }
     }
 
-    if (strict_callgraph) {
+    if (strict_callgraph && !f->disable_caller_validation) {
         // Find the caller
         cte_function *cf = cte_find_containing_function(post_call_addr);
         if (!cf) {
             cte_debug_restore(addr, post_call_addr, f, cf);
-            cte_die("Caller not found\n");
+            cte_die("Caller not found: %p->%s\n", post_call_addr, f->name);
         }
 
         if (!cte_check_call(addr, f, cf, type)) {
             // Failed to find the callee
             cte_debug_restore(addr, post_call_addr, f, cf);
-            cte_die("Unrecognized callee\n");
+            cte_die("Unrecognized callee (%s->%s)\n", cf->name, f->name);
         }
     }
 
@@ -1286,6 +1292,9 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     if (policy == CTE_LOAD)
         cte_die("Policy CTE_LOAD is not yet implemented");
 
+    //if (strstr(fn->name, "cte"))
+        cte_printf("wipe: %s + %d\n", fn->name, fn->size);
+
     // CTE_WIPE|CTE_KILL: Wipe the whole function body
     if (policy == CTE_KILL) {
         cte_memset(fn->vaddr,
@@ -1319,6 +1328,7 @@ int cte_init(int flags) {
 #endif
 
     strict_callgraph = flags & CTE_STRICT_CALLGRAPH;
+    strict_ctemeta   = flags & CTE_STRICT_CTEMETA;
 
     cte_vector_init(&functions,  sizeof(cte_function));
     cte_vector_init(&texts,      sizeof(cte_text));
@@ -1707,14 +1717,3 @@ unsigned cte_get_wiped_ranges(struct cte_range *ranges) {
 
 
 
-// Require LD_PRELOAD
-void *dlopen(const char *path, int flags) {
-    static void *(*original_dlopen)(const char*, int) = NULL;
-    if (!original_dlopen) {
-        original_dlopen = dlsym(RTLD_NEXT, "dlopen");
-    }
-    void *ret = (*original_dlopen)(path, flags);
-    // FIXME: Re-wipe
-
-    return ret;
-}

@@ -23,6 +23,7 @@ all: ${PRODUCTS}
 
 libcte.so: ${OBJECTS}
 	${CC} -shared ${OBJECTS} -lelf -ldl -o $@
+	ctemeta $@ $@.cte
 
 libcte.a: $(OBJECTS)
 	ar rcs $@ $^
