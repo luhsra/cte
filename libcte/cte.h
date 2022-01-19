@@ -14,6 +14,7 @@ enum cte_error {
 
 enum cte_flags {
     CTE_STRICT_CALLGRAPH = 1,
+    CTE_STRICT_CTEMETA   = 2, // Fail if there is no ctemeta for a library
 };
 
 #define  CTE_LOAD   1

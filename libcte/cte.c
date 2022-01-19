@@ -32,6 +32,8 @@ CTE_SEALED static void *bodies;         // stores function bodies
 CTE_SEALED static size_t bodies_size;
 
 CTE_SEALED static bool strict_callgraph;
+CTE_SEALED static bool strict_ctemeta;
+
 
 static void *vdso_start = NULL;
 static size_t vdso_size = 0;
@@ -834,6 +836,10 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
     else
         meta = NULL;
 
+    if (strict_ctemeta && meta == NULL ) {
+        cte_die("CTE_STRICT_META: No meta file for %s", filename);
+    }
+
     cte_text *text = cte_vector_push(&texts);
     uint32_t text_idx = (text - (cte_text *)texts.front);
     *text = (cte_text) {
@@ -1320,6 +1326,7 @@ int cte_init(int flags) {
 #endif
 
     strict_callgraph = flags & CTE_STRICT_CALLGRAPH;
+    strict_ctemeta   = flags & CTE_STRICT_CTEMETA;
 
     cte_vector_init(&functions,  sizeof(cte_function));
     cte_vector_init(&texts,      sizeof(cte_text));
