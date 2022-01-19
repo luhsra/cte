@@ -1131,8 +1131,7 @@ static bool cte_check_call(void* called_addr, cte_function *callee,
         return false;
     }
 
-    if ((type == CALLSITE_TYPE_INDIRECT || type == CALLSITE_TYPE_DIRECT_OR_INDIRECT) &&
-        (caller->meta->flags & FLAG_INDIRECT_CALLS) &&
+    if ((caller->meta->flags & FLAG_INDIRECT_CALLS) &&
         (callee->meta && (callee->meta->flags & FLAG_ADDRESS_TAKEN))) {
         return true;
     }
