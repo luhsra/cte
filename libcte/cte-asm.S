@@ -1,6 +1,9 @@
 .extern cte_restore
-.global cte_restore_entry
 
+.section        .cte_essential,"ax",@progbits
+.global cte_restore_entry
+.p2align 4
+.type   cte_restore_entry, @function
 cte_restore_entry:
         // A propper callframe for perf
         pushq %rbp
@@ -73,3 +76,5 @@ cte_restore_entry:
 
         popq %rbp
         ret
+
+.size   cte_restore_entry, .-cte_restore_entry
