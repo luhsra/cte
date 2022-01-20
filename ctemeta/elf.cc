@@ -325,7 +325,8 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                     continue;
                 }
 
-                // printf("%lx -> %d: [%lu] 0x%lx\n", offset, i, rel_type, value);
+                debug("Relevant relocation [%d] at 0x%lx, vlaue: 0x%lx, type: %lu\n",
+                      i, offset, value, rel_type);
 
                 vec.push_back({ offset, value, plt, got });
             }
