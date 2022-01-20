@@ -1,8 +1,9 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
-static const uint32_t CTE_VERSION = 1;
+static const uint32_t CTE_VERSION = 2;
 
 static const uint32_t FLAG_DEFINITION = (1 << 0);
 static const uint32_t FLAG_ADDRESS_TAKEN = (1 << 1);
@@ -13,9 +14,9 @@ static const uint32_t FLAG_VISITED = (1 << 31);
 typedef struct cte_meta_function {
     void *vaddr;
     size_t size;
-    void **callees;
-    void **jumpees;
-    void **siblings;
+    uint32_t *callees;
+    uint32_t *jumpees;
+    uint32_t *siblings;
     uint32_t callees_count;
     uint32_t jumpees_count;
     uint32_t siblings_count;

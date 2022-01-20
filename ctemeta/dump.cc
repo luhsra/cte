@@ -1,6 +1,7 @@
 #include "ctemeta.hh"
 #include "util.hh"
 #include <cstdint>
+#include <iterator>
 #include <ostream>
 #include <vector>
 #include "../common/meta.h"
@@ -32,12 +33,14 @@ std::vector<uint8_t> Cte::dump() {
         // Append calles
         if (!fn.callees.empty()) {
             p_callees = p_data;
-            addr_t size = fn.callees.size() * sizeof(void*);
+            addr_t size = fn.callees.size() * sizeof(uint32_t);
             buf.resize(p_data + size, 0);
-            void **m_callee = reinterpret_cast<void**>(buf.data() + p_data);
+            uint32_t *m_callee = reinterpret_cast<uint32_t*>(buf.data() + p_data);
             uint32_t i = 0;
             for (addr_t callee : fn.callees) {
-                m_callee[i] = (void*)callee;
+                uint32_t index = std::distance(functions.begin(),
+                                               functions.find(callee));
+                m_callee[i] = index;
                 i++;
             }
             p_data += size;
@@ -46,12 +49,14 @@ std::vector<uint8_t> Cte::dump() {
         // Append jumpees
         if (!fn.jumpees.empty()) {
             p_jumpees = p_data;
-            addr_t size = fn.jumpees.size() * sizeof(void*);
+            addr_t size = fn.jumpees.size() * sizeof(uint32_t);
             buf.resize(p_data + size, 0);
-            void **m_jumpee = reinterpret_cast<void**>(buf.data() + p_data);
+            uint32_t *m_jumpee = reinterpret_cast<uint32_t*>(buf.data() + p_data);
             uint32_t i = 0;
             for (addr_t jumpee : fn.jumpees) {
-                m_jumpee[i] = (void*)jumpee;
+                uint32_t index = std::distance(functions.begin(),
+                                               functions.find(jumpee));
+                m_jumpee[i] = index;
                 i++;
             }
             p_data += size;
@@ -60,12 +65,14 @@ std::vector<uint8_t> Cte::dump() {
         // Append siblings
         if (!fn.siblings.empty()) {
             p_siblings = p_data;
-            addr_t size = fn.siblings.size() * sizeof(void*);
+            addr_t size = fn.siblings.size() * sizeof(uint32_t);
             buf.resize(p_data + size, 0);
-            void **m_sibling = reinterpret_cast<void**>(buf.data() + p_data);
+            uint32_t *m_sibling = reinterpret_cast<uint32_t*>(buf.data() + p_data);
             uint32_t i = 0;
             for (addr_t sibling : fn.siblings) {
-                m_sibling[i] = (void*)sibling;
+                uint32_t index = std::distance(functions.begin(),
+                                               functions.find(sibling));
+                m_sibling[i] = index;
                 i++;
             }
             p_data += size;
@@ -76,9 +83,9 @@ std::vector<uint8_t> Cte::dump() {
         *mfn = (cte_meta_function) {
             .vaddr = (void*)fn.vaddr,
             .size = fn.size,
-            .callees = (void**)p_callees,
-            .jumpees = (void**)p_jumpees,
-            .siblings = (void**)p_siblings,
+            .callees = (uint32_t*)p_callees,
+            .jumpees = (uint32_t*)p_jumpees,
+            .siblings = (uint32_t*)p_siblings,
             .callees_count = (uint32_t)fn.callees.size(),
             .jumpees_count = (uint32_t)fn.jumpees.size(),
             .siblings_count = (uint32_t)fn.siblings.size(),

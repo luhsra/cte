@@ -221,6 +221,11 @@ static cte_function *cte_find_function(void* addr) {
 }
 
 CTE_ESSENTIAL
+static cte_function *cte_get_function(size_t index) {
+    return cte_vector_get(&functions, index);
+}
+
+CTE_ESSENTIAL
 static cte_function *cte_find_containing_function(void *addr) {
     return bsearch(addr, functions.front, functions.length,
                    sizeof(cte_function), cte_find_compare_in_function);
@@ -239,18 +244,6 @@ char cte_func_state(cte_function *func) {
     return CTE_LOAD;
 }
 
-static void *cte_decode_plt(void *entry) {
-    uint8_t *a = (uint8_t*)entry;
-    if (a[0] != 0xff)
-        return NULL;
-    if (a[1] != 0x25)
-        return NULL;
-    uint8_t *rip = a + 6;
-    uint32_t offset = *((uint32_t*)(a + 2));
-    uintptr_t *got_entry = (uintptr_t*)(rip + offset);
-    return (void*)(*got_entry);
-}
-
 static bool cte_is_plt(void *addr) {
     cte_plt *plt;
     for_each_cte_vector(&plts, plt) {
@@ -258,6 +251,22 @@ static bool cte_is_plt(void *addr) {
             return true;
     }
     return false;
+}
+
+static void *cte_decode_if_plt(void *entry) {
+    void *addr = entry;
+    while (cte_is_plt(addr)) { // Multi-level plt indirections exist!
+        uint8_t *a = (uint8_t*)addr;
+        if (a[0] != 0xff)
+            return NULL;
+        if (a[1] != 0x25)
+            return NULL;
+        uint8_t *rip = a + 6;
+        uint32_t offset = *((uint32_t*)(a + 2));
+        uintptr_t *got_entry = (uintptr_t*)(rip + offset);
+        addr = (void*)(*got_entry);
+    }
+    return addr;
 }
 
 static cte_meta_header *cte_meta_init(void *data, size_t size,
@@ -301,16 +310,6 @@ static cte_meta_header *cte_meta_init(void *data, size_t size,
             (fn->jumpees && ((void*)&fn->jumpees[fn->jumpees_count] > data + size)) ||
             (fn->siblings && ((void*)&fn->siblings[fn->siblings_count] > data + size)))
             cte_die("Corrupt meta info\n");
-
-        for (uint32_t i = 0; i < fn->callees_count; i++) {
-            fn->callees[i] = ADDR_OFFSET(load_addr, fn->callees[i]);
-        }
-        for (uint32_t i = 0; i < fn->jumpees_count; i++) {
-            fn->jumpees[i] = ADDR_OFFSET(load_addr, fn->jumpees[i]);
-        }
-        for (uint32_t i = 0; i < fn->siblings_count; i++) {
-            fn->siblings[i] = ADDR_OFFSET(load_addr, fn->siblings[i]);
-        }
     }
 #undef ADDR_OFFSET
 
@@ -340,19 +339,19 @@ static cte_meta_header *cte_meta_load(char *objname, void *load_addr) {
 }
 
 typedef struct cte_pset {
-    void **front;
+    uint32_t *front;
     size_t length;
 } cte_pset;
 
 static const cte_pset EMPTY_PSET;
 
-static void cte_pset_insert(cte_pset *pset, void* item) {
+static void cte_pset_insert(cte_pset *pset, uint32_t item) {
     for (size_t n = 0; n < pset->length; n++) {
         if (pset->front[n] == item)
             return;
     }
     size_t offset = pset->length++;
-    pset->front = realloc(pset->front, pset->length * sizeof(void*));
+    pset->front = realloc(pset->front, pset->length * sizeof(uint32_t));
     pset->front[offset] = item;
 }
 
@@ -375,7 +374,7 @@ static void cte_meta_propagate_jumpees(cte_function *fn, cte_pset *pset) {
 
     for (uint32_t i = 0; i < fn->meta->jumpees_count; i++) {
         cte_pset_insert(pset, fn->meta->jumpees[i]);
-        cte_function *jumpee = cte_find_function(fn->meta->jumpees[i]);
+        cte_function *jumpee = cte_get_function(fn->meta->jumpees[i]);
         cte_meta_propagate_jumpees(jumpee, pset);
     }
 }
@@ -386,10 +385,26 @@ static void cte_meta_propagate_address_taken(cte_function *fn) {
     fn->meta->flags |= FLAG_VISITED;
 
     for (uint32_t i = 0; i < fn->meta->jumpees_count; i++) {
-        cte_function *jumpee = cte_find_function(fn->meta->jumpees[i]);
+        cte_function *jumpee = cte_get_function(fn->meta->jumpees[i]);
         if (jumpee && jumpee->meta) {
             cte_meta_propagate_address_taken(jumpee);
             jumpee->meta->flags |= FLAG_ADDRESS_TAKEN;
+        }
+    }
+}
+
+static void cte_meta_assign_global_indices(cte_meta_function *meta_fns,
+                                           uint32_t *indices,
+                                           uint32_t *indices_count) {
+    uint32_t i = 0;
+    while (i < *indices_count) {
+        cte_function *fn = cte_find_function(meta_fns[indices[i]].vaddr);
+        if (fn) {
+            indices[i] = fn - (cte_function*)functions.front;
+            i++;
+        } else {
+            (*indices_count)--;
+            indices[i] = indices[*indices_count];
         }
     }
 }
@@ -398,7 +413,7 @@ static void cte_meta_assign(void) {
     cte_text *text;
     cte_function *fn;
 
-    // Resolve all callees to plt functions
+    // Decode all functions
     // FIXME: requires env BIND_NOW set
     for_each_cte_vector(&texts, text) {
         if (!text->meta)
@@ -406,35 +421,9 @@ static void cte_meta_assign(void) {
         cte_meta_function *start = cte_meta_get_functions(text->meta);
         cte_meta_function *end = start + text->meta->functions_count;
         for (cte_meta_function *meta = start; meta < end; meta++) {
-            for (uint32_t i = 0; i < meta->callees_count; i++) {
-                if (cte_is_plt(meta->callees[i]))
-                    meta->callees[i] = cte_decode_plt(meta->callees[i]);
-            }
-            for (uint32_t i = 0; i < meta->jumpees_count; i++) {
-                if (cte_is_plt(meta->jumpees[i]))
-                    meta->jumpees[i] = cte_decode_plt(meta->jumpees[i]);
-            }
-        }
-    }
-
-    // Decode all functions
-    for_each_cte_vector(&texts, text) {
-        if (!text->meta)
-            continue;
-        cte_meta_function *start = cte_meta_get_functions(text->meta);
-        cte_meta_function *end = start + text->meta->functions_count;
-        for (cte_meta_function *meta = start; meta < end; meta++) {
             void *org_addr = meta->vaddr;
-            cte_function *fn;
-            do {
-                if (cte_is_plt(meta->vaddr))
-                    meta->vaddr = cte_decode_plt(meta->vaddr);
-
-                fn = cte_find_function(meta->vaddr);
-
-                // Multi-level plt indirections exist!
-            } while (cte_is_plt(meta->vaddr));
-
+            meta->vaddr = cte_decode_if_plt(meta->vaddr);
+            cte_function *fn = cte_find_function(meta->vaddr);
             if (!fn) {
                 // Ignore VDSO functions
                 if (meta->vaddr >= vdso_start &&
@@ -461,6 +450,22 @@ static void cte_meta_assign(void) {
                 // Update size according to meta info
                 fn->size = meta->size;
             }
+        }
+    }
+
+    // Update callee, jumpee and sibling indices to global function indices
+    for_each_cte_vector(&texts, text) {
+        if (!text->meta)
+            continue;
+        cte_meta_function *start = cte_meta_get_functions(text->meta);
+        cte_meta_function *end = start + text->meta->functions_count;
+        for (cte_meta_function *meta = start; meta < end; meta++) {
+            cte_meta_assign_global_indices(start, meta->callees,
+                                           &meta->callees_count);
+            cte_meta_assign_global_indices(start, meta->jumpees,
+                                           &meta->jumpees_count);
+            cte_meta_assign_global_indices(start, meta->siblings,
+                                           &meta->siblings_count);
         }
     }
 
@@ -495,7 +500,7 @@ static void cte_meta_assign(void) {
         cte_meta_reset_visited_flags();
         for (uint32_t i = 0; i < fn->meta->callees_count; i++) {
             cte_pset_insert(&set, fn->meta->callees[i]);
-            cte_function *cfn = cte_find_function(fn->meta->callees[i]);
+            cte_function *cfn = cte_get_function(fn->meta->callees[i]);
             if (!cfn)
                 continue;
             cte_meta_propagate_jumpees(cfn, &set);
@@ -504,19 +509,19 @@ static void cte_meta_assign(void) {
         // Allocate and initialize a new meta object
         size_t i_meta = data_size;
         size_t i_callees = i_meta + sizeof(cte_meta_function);
-        size_t i_siblings = i_callees + set.length * sizeof(void*);
-        data_size = i_siblings + fn->meta->siblings_count * sizeof(void*);
+        size_t i_siblings = i_callees + set.length * sizeof(uint32_t);
+        data_size = i_siblings + fn->meta->siblings_count * sizeof(uint32_t);
         while (data_size > data_capacity) {
             cte_mmap_inc((void*)(&data), &data_capacity);
         }
         cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
-        void **callees = (void**)(&data[i_callees]);
-        void **siblings = (void**)(&data[i_siblings]);
+        uint32_t *callees = (uint32_t*)(&data[i_callees]);
+        uint32_t *siblings = (uint32_t*)(&data[i_siblings]);
         *meta = *fn->meta;
-        memcpy(callees, set.front, set.length * sizeof(void*));
+        memcpy(callees, set.front, set.length * sizeof(uint32_t));
         meta->callees_count = set.length;
         memcpy(siblings, fn->meta->siblings,
-               fn->meta->siblings_count * sizeof(void*));
+               fn->meta->siblings_count * sizeof(uint32_t));
         cte_pset_free(&set);
     }
     // Assign newly created meta objects to the functions
@@ -527,12 +532,12 @@ static void cte_meta_assign(void) {
         size_t i_meta = data_idx;
         cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
         size_t i_callees = i_meta + sizeof(cte_meta_function);
-        size_t i_siblings = i_callees + meta->callees_count * sizeof(void*);
-        data_idx = i_siblings + meta->siblings_count * sizeof(void*);
-        meta->callees = (void**)(&data[i_callees]);
+        size_t i_siblings = i_callees + meta->callees_count * sizeof(uint32_t);
+        data_idx = i_siblings + meta->siblings_count * sizeof(uint32_t);
+        meta->callees = (uint32_t*)(&data[i_callees]);
         meta->jumpees = NULL;
         meta->jumpees_count = 0;
-        meta->siblings = (void**)(&data[i_siblings]);
+        meta->siblings = (uint32_t*)(&data[i_siblings]);
         fn->meta = meta;
     }
 
@@ -541,12 +546,12 @@ static void cte_meta_assign(void) {
         if (!fn->meta)
             continue;
         for (uint32_t i = 0; i < fn->meta->callees_count; i++) {
-            cte_function *cf = cte_find_function(fn->meta->callees[i]);
+            cte_function *cf = cte_get_function(fn->meta->callees[i]);
             if (cf && cf->meta && cf->meta->flags & FLAG_INDIRECT_JUMPS)
                 fn->meta->flags |= FLAG_INDIRECT_CALLS;
         }
         for (uint32_t i = 0; i < fn->meta->siblings_count; i++) {
-            cte_function *sf = cte_find_function(fn->meta->siblings[i]);
+            cte_function *sf = cte_get_function(fn->meta->siblings[i]);
             if (sf && sf->meta && sf->meta->flags & FLAG_INDIRECT_JUMPS)
                 fn->meta->flags |= FLAG_INDIRECT_CALLS;
         }
@@ -1060,13 +1065,8 @@ static void cte_debug_restore(void *addr, void *post_call_addr,
     if (caller && caller->meta) {
         cte_printf("Allowed callees (%d)\n", caller->meta->callees_count);
         for (uint32_t i = 0; i < caller->meta->callees_count; i++) {
-            void *callee = caller->meta->callees[i];
-            cte_function *cd = cte_find_function(callee);
-            if (cd) {
-                cte_printf("  %p: %s\n", callee, cd->name);
-            } else {
-                cte_printf("  %p: ??\n", callee);
-            }
+            cte_function *cd = cte_get_function(caller->meta->callees[i]);
+            cte_printf("  %p: %s\n", cd->vaddr, cd->name);
         }
     }
     cte_printf("---------\n");
@@ -1166,8 +1166,8 @@ static bool cte_check_call(void* called_addr, cte_function *callee,
     // A caller function was found, and it has .meta set
     // Let's see if we are allowed to call function f
     for (uint32_t i = 0; i < caller->meta->callees_count; i++) {
-        void *callee = caller->meta->callees[i];
-        if (callee == called_addr)
+        cte_function *callee = cte_get_function(caller->meta->callees[i]);
+        if (callee->vaddr == called_addr)
             return true;
     }
 
@@ -1252,7 +1252,7 @@ int cte_restore(void *addr, void *post_call_addr) {
     // Load the sibling
     if (f->meta) {
         for (uint32_t i = 0; i < f->meta->siblings_count; i++) {
-            cte_function *func_sibling = cte_find_function(f->meta->siblings[i]);
+            cte_function *func_sibling = cte_get_function(f->meta->siblings[i]);
             if (cte_func_state(func_sibling) != CTE_LOAD) {
                 // cte_printf("-> load sibling: %s\n", func_sibling->name);
                 cte_modify_begin(func_sibling->vaddr, func_sibling->size);
@@ -1606,8 +1606,7 @@ static void cte_mark_loadable(bool *loadables, cte_function *function) {
         return;
 
     for (uint32_t i = 0; i < function->meta->callees_count; i++) {
-        void *callee = function->meta->callees[i];
-        cte_function *cf = cte_find_function(callee);
+        cte_function *cf = cte_get_function(function->meta->callees[i]);
         cte_mark_loadable(loadables, cf);
     }
 }
