@@ -380,6 +380,20 @@ static void cte_meta_propagate_jumpees(cte_function *fn, cte_pset *pset) {
     }
 }
 
+static void cte_meta_propagate_address_taken(cte_function *fn) {
+    if (fn->meta->flags & FLAG_VISITED)
+        return;
+    fn->meta->flags |= FLAG_VISITED;
+
+    for (uint32_t i = 0; i < fn->meta->jumpees_count; i++) {
+        cte_function *jumpee = cte_find_function(fn->meta->jumpees[i]);
+        if (jumpee && jumpee->meta) {
+            cte_meta_propagate_address_taken(jumpee);
+            jumpee->meta->flags |= FLAG_ADDRESS_TAKEN;
+        }
+    }
+}
+
 static void cte_meta_assign(void) {
     cte_text *text;
     cte_function *fn;
@@ -459,6 +473,13 @@ static void cte_meta_assign(void) {
         else if (!(fn->meta->flags & FLAG_DEFINITION))
             printf("Warning: Meta info function definition not found: [%s] %s\n",
                    text->filename, fn->name);
+    }
+
+    // Propagate FLAG_ADDRESS_TAKEN
+    cte_meta_reset_visited_flags();
+    for_each_cte_vector(&functions, fn) {
+        if (fn->meta && (fn->meta->flags & FLAG_ADDRESS_TAKEN))
+            cte_meta_propagate_address_taken(fn);
     }
 
     // Propagate callees and copy meta objects

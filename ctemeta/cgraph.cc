@@ -224,6 +224,13 @@ void Cte::propagate() {
         auto &fn = item.second;
         propagate_indirect_jumps(fn);
     }
+
+    clear_visited();
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        if (fn.address_taken)
+            propagate_address_taken(fn);
+    }
 }
 
 void Cte::propagate_jumpees(Function &fn, std::set<addr_t> &gather) {
@@ -270,5 +277,17 @@ void Cte::propagate_indirect_jumps(Function &fn) {
         auto &sibling = functions.at(addr);
         if (sibling.has_indirect_jumps)
             fn.has_indirect_calls = true;
+    }
+}
+
+void Cte::propagate_address_taken(Function &fn) {
+    if (fn.visited)
+        return;
+    fn.visited = true;
+
+    for (addr_t addr : fn.jumpees) {
+        auto &jumpee = functions.at(addr);
+        propagate_address_taken(jumpee);
+        jumpee.address_taken = true;
     }
 }

@@ -101,6 +101,7 @@ struct Cte {
     void propagate_jumpees(Function &fn, std::set<addr_t> &gather);
     void propagate_siblings(Function &fn);
     void propagate_indirect_jumps(Function &fn);
+    void propagate_address_taken(Function &fn);
     void clear_visited();
 
     std::vector<uint8_t> dump();
