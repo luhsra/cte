@@ -1151,7 +1151,7 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
 
 CTE_ESSENTIAL
 static bool cte_check_call(void* called_addr, cte_function *callee,
-                           cte_function *caller, cte_callsite_type type) {
+                           cte_function *caller) {
     if ((strict_callgraph && !caller->meta) ||
         !(caller->meta->flags & FLAG_DEFINITION)) {
         cte_printf("Invalid caller meta info: %s\n", caller->name);
@@ -1227,7 +1227,7 @@ int cte_restore(void *addr, void *post_call_addr) {
             cte_die("Caller not found: %p->%s\n", post_call_addr, f->name);
         }
 
-        if (!cte_check_call(addr, f, cf, type)) {
+        if (!cte_check_call(addr, f, cf)) {
             // Failed to find the callee
             cte_debug_restore(addr, post_call_addr, f, cf);
             cte_die("Unrecognized callee (%s->%s)\n", cf->name, f->name);
