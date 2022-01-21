@@ -1631,7 +1631,7 @@ int cte_mmview_unshare(void) {
 
 
 CTE_ESSENTIAL
-int cte_wipe_rules(cte_rules *rules) {
+int cte_wipe(cte_rules *rules) {
 #if CONFIG_STAT
     //if (cte_stat.wipe_count) {
     //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));

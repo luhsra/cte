@@ -49,9 +49,7 @@ int cte_init(int flags);
 int cte_mmview_unshare(void);
 
 void cte_enable_threshold();
-int cte_wipe_rules(cte_rules *rules);
-static inline int cte_wipe() { return cte_wipe_rules(NULL); }
-
+int cte_wipe(cte_rules *rules);
 
 
 #define CTE_DUMP_TEXTS (1 << 0)
