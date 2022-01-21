@@ -41,6 +41,7 @@ cte_rules *cte_rules_init(cte_wipe_policy def);
 void cte_rules_free(cte_rules *);
 unsigned cte_rules_set(cte_rules *,  cte_wipe_policy pol);
 unsigned cte_rules_set_func(cte_rules *, cte_wipe_policy pol,  void *func, char children);
+unsigned cte_rules_set_funcname(cte_rules *rules, cte_wipe_policy policy, char *pat, char children);
 unsigned cte_rules_set_indirect(cte_rules *, cte_wipe_policy pol);
 
 int cte_init(int flags);

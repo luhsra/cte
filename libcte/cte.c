@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stddef.h>
+#include <fnmatch.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -775,6 +776,29 @@ unsigned cte_rules_set_func(cte_rules *rules, cte_wipe_policy policy, void *fptr
         cte_rules_set_func_0(rules, policy, func);
     }
  
+    return ret;
+}
+
+unsigned cte_rules_set_funcname(cte_rules *rules, cte_wipe_policy policy, char *pat, char children) {
+    unsigned ret = 0;
+    cte_function *fn;
+    // cte_printf("Pat: %s %d\n", pat, children);
+    for_each_cte_vector(&functions, fn) {
+        if (fnmatch(pat, fn->name, 0) == 0) {
+            if (children)
+                ret += cte_rules_set_func_1(rules, policy, fn);
+            else {
+                cte_rules_set_func_0(rules, policy, fn);
+                ret += 1;
+            }
+        }
+    }
+
+    if (children) {
+        for (unsigned i = 0; i < rules->length; i++) {
+            rules->policy[i] &= ~CTE_FLAG_VISITED;
+        }
+    }
     return ret;
 }
 
@@ -1666,7 +1690,7 @@ int cte_wipe_rules(cte_rules *rules) {
                     wipe_count += 1;
                     wipe_bytes += f->size;
                 }
-            } else {
+            } else if (policy != CTE_LOAD ) {
                 // The function is still wiped, account for that
                 wipe_count += 1;
                 wipe_bytes += f->size;
