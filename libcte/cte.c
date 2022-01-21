@@ -949,6 +949,16 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             // threshold wiping
             {0, "__tls_get_addr"}, {0, "_dl_update_slotinfo"}, {0, "update_get_addr"},
 #endif
+            ////////////////////////////////////////////////////////////////
+            // Disable Caller Validation for these functions
+
+            // We disable callsite detection for the trampoline function
+            // of dynamic loading, as its callsite is highly weird.
+            // FIXME: Just improve the callsite detection?
+            {2, "_dl_runtime_resolve_xsavec"},
+
+            // We do not validate the caller of sigreturn and exit
+            {2, "__restore_rt"}, {2, "_dl_fini"}, {2, "_fini"},
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
@@ -959,13 +969,12 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
                 function->essential |= true;
                 break;
             }
+            if (names[i].begin == 2 && strcmp(names[i].pattern, it->name) == 0) {
+                function->disable_caller_validation |= 1;
+                break;
+            }
         }
-        // We disable callsite detection for the trampoline function
-        // of dynamic loading, as its callsite is highly weird.
-        // FIXME: Just improve the callsite detection?
-        if (strcmp(function->name, "_dl_runtime_resolve_xsavec") == 0) {
-            function->disable_caller_validation = 1;
-        }
+
         if (function->essential) {
             //cte_debug("essential: %s %d\n", it->name, function->essential);
         }
