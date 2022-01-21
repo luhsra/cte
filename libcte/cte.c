@@ -701,16 +701,91 @@ unsigned cte_rules_set(cte_rules *rules, cte_wipe_policy policy) {
     return ret;
 }
 
+static void
+cte_rules_set_func_0(cte_rules *rules, cte_wipe_policy policy, cte_function* func) {
+    // cte_printf("mark %s with %d\n", func->name, policy);
+    if (!(rules->policy[func_id(func)] & CTE_FORCE)) {
+        rules->policy[func_id(func)] = policy;
+    }
+}
+
+static
+unsigned cte_rules_set_func_1(cte_rules *rules, cte_wipe_policy policy, cte_function *func) {
+    unsigned ret = 0;
+    unsigned func_stack_max = 0;
+    unsigned idx = 0;
+    cte_function **func_stack = NULL;
+
+#define func_stack_push(func) do {       \
+        if (idx + 1 >= func_stack_max) { \
+            func_stack_max += 10;        \
+            func_stack = realloc(func_stack, sizeof(cte_function *) * func_stack_max);\
+        }                                \
+        func_stack[idx ++] = func;       \
+    } while(0)
+
+    func_stack_push(func);
+
+    while(idx > 0) {
+        cte_function *cur = func_stack[--idx]; // pop
+        cte_rules_set_func_0(rules, policy, cur);
+        rules->policy[func_id(cur)] |= CTE_FLAG_VISITED;
+        ret++;
+
+        for (unsigned i = 0; i < cur->meta->callees_count; i++) {
+            cte_function *f = cte_vector_get(&functions, cur->meta->callees[i]);
+            if (f && !(rules->policy[func_id(f)] & CTE_FLAG_VISITED))
+                func_stack_push(f);
+        }
+        for (unsigned i = 0; i < cur->meta->jumpees_count; i++) {
+            cte_function *f = cte_vector_get(&functions, cur->meta->jumpees[i]);
+            if (f && !(rules->policy[func_id(f)] & CTE_FLAG_VISITED))
+                func_stack_push(f);
+        }
+        for (unsigned i = 0; i < cur->meta->siblings_count; i++) {
+            cte_function *f = cte_vector_get(&functions, cur->meta->siblings[i]);
+            if (f && !(rules->policy[func_id(f)] & CTE_FLAG_VISITED))
+                func_stack_push(f);
+        }
+    }
+#undef func_stack_push
+//     cte_printf("Max Stack Depth %d\n", func_stack_max);
+    free(func_stack);
+
+    return ret;
+}
+
 unsigned cte_rules_set_func(cte_rules *rules, cte_wipe_policy policy, void *fptr, char children) {
     unsigned ret = 0;
-    assert(children == 0 && "Not implemented yet");
 
+    // Find the argument function
     cte_function *func = cte_find_function(fptr);
-    if (func) {
-        if (!(rules->policy[func_id(func)] & CTE_FORCE)) {
-            rules->policy[func_id(func)] = policy;
-            ret++;
+    if (! func) return 0;
+
+    if (children) {
+        ret += cte_rules_set_func_1(rules, policy, func);
+
+        for (unsigned i = 0; i < rules->length; i++) {
+            rules->policy[i] &= ~CTE_FLAG_VISITED;
         }
+    } else {
+        cte_rules_set_func_0(rules, policy, func);
+    }
+ 
+    return ret;
+}
+
+unsigned cte_rules_set_indirect(cte_rules *rules, cte_wipe_policy policy) {
+    unsigned ret = 0;
+    cte_function *fn;
+
+    for_each_cte_vector(&functions, fn) {
+        if (fn->meta && fn->meta->flags & FLAG_ADDRESS_TAKEN)
+            ret += cte_rules_set_func_1(rules, policy, fn);
+    }
+
+    for (unsigned i = 0; i < rules->length; i++) {
+        rules->policy[i] &= ~CTE_FLAG_VISITED;
     }
     return ret;
 }
@@ -857,13 +932,13 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
 
     // Init meta data
     cte_meta_header *meta;
-    if (strict_callgraph)
+    if (strict_callgraph || strict_ctemeta)
         meta = cte_meta_load(filename, (void*)info->dlpi_addr);
     else
         meta = NULL;
 
     if (strict_ctemeta && meta == NULL ) {
-        cte_die("CTE_STRICT_META: No meta file for %s", filename);
+        cte_die("CTE_STRICT_META: No meta file for %s\n", filename);
     }
 
     cte_text *text = cte_vector_push(&texts);
@@ -956,6 +1031,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             // of dynamic loading, as its callsite is highly weird.
             // FIXME: Just improve the callsite detection?
             {2, "_dl_runtime_resolve_xsavec"},
+            {3, "_dl_relocate_object"},
 
             // We do not validate the caller of sigreturn and exit
             {2, "__restore_rt"}, {2, "_dl_fini"}, {2, "_fini"},
@@ -971,6 +1047,10 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             }
             if (names[i].begin == 2 && strcmp(names[i].pattern, it->name) == 0) {
                 function->disable_caller_validation |= 1;
+                break;
+            }
+            if (names[i].begin == 3 && strcmp(names[i].pattern, it->name) == 0) {
+                function->disable_callee_validation |= 1;
                 break;
             }
         }
@@ -1247,9 +1327,14 @@ int cte_restore(void *addr, void *post_call_addr) {
             cte_function *cf = cte_find_containing_function(post_call_addr);
             if (!cf) {
                 cte_debug_restore(addr, post_call_addr, f, cf);
-                cte_printf("Caller not found: %p->%s\n", post_call_addr, f->name);
-                // FIXME: Die if caller comes from a known address
-            } else if (!cte_check_call(addr, f, cf)) {
+                // If unknown caller comes from a known library=> fail
+                // FIXME: One would validate if the calle comes from another library
+                cte_text *text;
+                for_each_cte_vector(&texts, text) {
+                    if (text->vaddr <= post_call_addr && post_call_addr < (text->vaddr+text->size))
+                        cte_die("Caller not found: %p->%s\n", post_call_addr, f->name);
+                }
+            } else if (!cte_check_call(addr, f, cf) && !cf->disable_callee_validation) {
                 // Failed to find the callee
                 cte_debug_restore(addr, post_call_addr, f, cf);
                 cte_die("Unrecognized callee (%s->%s)\n", cf->name, f->name);
@@ -1375,13 +1460,20 @@ int cte_init(int flags) {
     cte_vector_init(&texts,      sizeof(cte_text));
     cte_vector_init(&plts,       sizeof(cte_plt));
 
+    if (strict_callgraph || strict_ctemeta) {
+        char *env = getenv("LD_BIND_NOW");
+        if (!env || *env == 0) {
+            cte_die("ctemeta: Please set LD_BIND_NOW to a non-empty string\n");
+        }
+    }
+
     // extern char *__progname;
     extern char * program_invocation_name;
     int rc = dl_iterate_phdr(cte_callback, program_invocation_name);
     if (rc < 0)
         return rc;
 
-    if (strict_callgraph)
+    if (strict_callgraph || strict_ctemeta)
         cte_meta_assign();
 
     // Save the function bodies
@@ -1562,7 +1654,7 @@ int cte_wipe_rules(cte_rules *rules) {
         // Fetch the wiping policy
         cte_wipe_policy policy = CTE_WIPE;
         if (rules) {
-            policy = rules->policy[func_id(f)] & ~(CTE_FORCE | CTE_SYSTEM_FORCE);
+            policy = rules->policy[func_id(f)] & ~(CTE_FLAG_MASK);
         }
 
         if (!f->essential && f != cf) {

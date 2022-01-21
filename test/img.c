@@ -86,10 +86,9 @@ struct imgRawImage* loadJpegImageFile(char* lpFilename) {
 }
 
 __attribute__((weak))
-struct imgRawImage* loadJpegImageFile_wiped(long mmview, bool wipe, char* lpFilename) {
+struct imgRawImage* loadJpegImageFile_wiped(long mmview, char* lpFilename) {
     long previous = mmview_migrate(mmview);
     // printf("%ld -> %ld\n",  previous, mmview);
-    if (wipe) cte_wipe();
     struct imgRawImage *ret = loadJpegImageFile(lpFilename);
     int rc = mmview_migrate(previous); (void) rc;
     // printf("%ld -> %ld (%ld)\n",  mmview, rc, previous);
@@ -227,20 +226,32 @@ int main(int argc, char *argv[]) {
     // With Wiping
 
     // And now with mmview and libcte
-    cte_init(0);
-    //cte_init(0);
+    cte_init(CTE_STRICT_CALLGRAPH | CTE_STRICT_CTEMETA);
     cte_mmview_unshare();
     long img_mmview = mmview_create();
-    long previous;
-    int fd;
+    {
+        cte_rules *R = cte_rules_init(CTE_KILL);
+        unsigned x = 0;
+        x += cte_rules_set_indirect(R, CTE_WIPE);
+        x += cte_rules_set_func(R, CTE_WIPE, &loadJpegImageFile_wiped, 1);
+        cte_rules_set_func(R, CTE_LOAD, &loadJpegImageFile_wiped, 0);
+        // We add the mprotect function here also, since we have to
+        // include it into the following mprotect benchmark.... However, this only gives an disadvantage for libcte
+        cte_rules_set_func(R, CTE_LOAD, &loadJpegImageFile_mprotect, 0);
+        printf("CTE_WIPE: %d funcs\n", x);
+        long previous = mmview_migrate(img_mmview);
+        cte_wipe_rules(R);
+        mmview_migrate(previous);
+        cte_rules_free(R);
+    }
 
-    loadJpegImageFile_wiped(img_mmview, true, argv[1]);
+    int fd;
     for (unsigned _i = 0; _i < repeat; _i ++) {
         clock_gettime(CLOCK_REALTIME, &ts0);
         for (unsigned i = 0; i < IMG_ROUNDS; i++) {
             // Wikimedia Image of the Day: 15th December
             // Intercession Church on the Nerl in Bogolyubovo near Vladimir, Russia
-            struct imgRawImage *image = loadJpegImageFile_wiped(img_mmview, false, imageFile);
+            struct imgRawImage *image = loadJpegImageFile_wiped(img_mmview, imageFile);
 
             // As loading the image allocates a 41 MiB buffer, it uses
             // mmap. With mmviews, these have to be synchronized => We
@@ -260,7 +271,7 @@ int main(int argc, char *argv[]) {
     struct cte_range *ranges = malloc(sizeof(struct cte_range) * 10000); 
     fd = open("img.migrate.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
     cte_dump_state(fd, 0);
-    previous = mmview_migrate(img_mmview); 
+    long previous = mmview_migrate(img_mmview); 
     cte_dump_state(fd, CTE_DUMP_FUNCS|CTE_DUMP_TEXTS);
     unsigned range_count = cte_get_wiped_ranges(ranges);
     mmview_migrate(previous);

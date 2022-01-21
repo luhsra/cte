@@ -9,7 +9,14 @@
 
 
 __attribute__((weak))
+int foo_indirect (void)  {
+    return 1;
+}
+int (*ptr)(void) = &foo_indirect;
+
+__attribute__((weak))
 int foo (void)  {
+    ptr();
     return 1;
 }
 
@@ -19,7 +26,7 @@ int bar (void)  {
 }
 
 int main(void) {
-    int rc = cte_init(0);
+    int rc = cte_init(CTE_STRICT_CALLGRAPH|CTE_STRICT_CTEMETA);
     if (rc < 0) {
         perror("CTE Error");
         return 2;
@@ -28,8 +35,8 @@ int main(void) {
     int x = 0;
 
     cte_rules *R0 = cte_rules_init(CTE_KILL);
-    x += cte_rules_set_func(R0, CTE_WIPE, &foo, 0);
-    x += cte_rules_set_func(R0, CTE_WIPE, &bar, 0);
+    x += cte_rules_set_func(R0, CTE_WIPE, &main, 1);
+    x += cte_rules_set_indirect(R0, CTE_WIPE);
     printf("R0: length: %u, wiped: %d\n", R0->length, x);
 
     cte_rules *R1 = cte_rules_init(CTE_WIPE);

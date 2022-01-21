@@ -31,10 +31,10 @@
 
 #define cte_range_dump(type, range, ranges) do {                         \
         for (unsigned i = 0; i < (ranges); i++) {                       \
-            void *first_page = ROUND_PAGE_UP(range[i].type);         \
-            void *last_page = ROUND_PAGE_DOWN(range[i].type + range[i].length); \
+            void *first_page = ROUND_PAGE_UP(range[i].address);         \
+            void *last_page = ROUND_PAGE_DOWN(range[i].address + range[i].length); \
             if (last_page <= first_page) continue;                      \
-            printf("mprotect %ld-%ld => %p + %p (%ld pages)\n", range[i].type, range[i].type+range[i].length, \
+            printf("mprotect %ld-%ld => %p + %p (%ld pages)\n", range[i].address, range[i].address+range[i].length, \
                    first_page, last_page, (last_page - first_page) >> 12);\
         }                                                               \
     } while(0)

@@ -28,7 +28,8 @@ struct cte_function {
     void *body;
     cte_meta_function *meta;
     bool essential;
-    bool disable_caller_validation : 1;
+    bool disable_caller_validation : 1; // If function is called: do not validate
+    bool disable_callee_validation : 1; // If function calls, do not validate
     // FIXME: Currently used if not strict_callgraph, should be removed.
     uint32_t sibling_idx;
 };

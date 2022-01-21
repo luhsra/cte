@@ -19,11 +19,9 @@ bool check_empty() {
 }
 
 __attribute__((weak))
-bool check_empty_wipe(long mmview, bool wipe)  {
+bool check_empty_wipe(long mmview)  {
     long previous = mmview_migrate(mmview);
     // printf("%ld -> %ld\n",  previous, mmview);
-
-    if (wipe) cte_wipe();
     bool ret = check_empty();
     int rc = mmview_migrate(previous); (void) rc;
     // printf("%ld -> %ld\n",  mmview, rc);
@@ -65,7 +63,7 @@ int main(int argc, char *argv[]) {
     }
 
     // And now with mmview and libcte
-    cte_init(CTE_STRICT_CALLGRAPH);
+    cte_init(CTE_STRICT_CALLGRAPH|CTE_STRICT_CTEMETA);
     //cte_init(0);
     cte_mmview_unshare();
     long global_mmview, empty_mmview;
@@ -74,12 +72,27 @@ int main(int argc, char *argv[]) {
 
     global_mmview = mmview_current();
     empty_mmview = mmview_create();
+    // Prepare Function mmview
+    {
+        cte_rules *R = cte_rules_init(CTE_KILL);
+        unsigned x = 0;
+        // x += cte_rules_set_indirect(R, CTE_WIPE);
+        x += cte_rules_set_func(R, CTE_WIPE, &check_empty_wipe, 1);
+        x += cte_rules_set_func(R, CTE_WIPE, &cte_dump_state, 1);
+        x += cte_rules_set_func(R, CTE_WIPE, &cte_get_wiped_ranges, 1);
+        cte_rules_set_func(R, CTE_LOAD, &check_empty_wipe, 0);
+        printf("CTE_WIPE: %d funcs\n", x);
 
-    check_empty_wipe(empty_mmview, true);
+        long previous = mmview_migrate(empty_mmview);
+        cte_wipe_rules(R);
+        mmview_migrate(previous);
+        cte_rules_free(R);
+    }
+
     for (unsigned _i = 0; _i < repeat; _i ++) {
         clock_gettime(CLOCK_REALTIME, &ts0);
         for (unsigned i = 0; i < EMPTY_ROUNDS; i++) {
-            check_empty_wipe(empty_mmview, false);
+            check_empty_wipe(empty_mmview);
         }
         clock_gettime(CLOCK_REALTIME, &ts1);
         fprintf(stderr, "empty,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, EMPTY_ROUNDS);
@@ -88,7 +101,8 @@ int main(int argc, char *argv[]) {
     // Statistics over the mmview
     struct cte_range *ranges = malloc(sizeof(struct cte_range) * 10000); 
     fd = open("empty.migrate.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
-    cte_dump_state(fd, 0);
+    cte_dump_state
+        (fd, 0);
     previous = mmview_migrate(empty_mmview);
     cte_dump_state(fd, CTE_DUMP_FUNCS|CTE_DUMP_TEXTS);
     unsigned range_count = cte_get_wiped_ranges(ranges);

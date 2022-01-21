@@ -93,10 +93,9 @@ out:
 
 
 __attribute__((weak))
-bool check_cert_wipe(long mmview, bool wipe)  {
+bool check_cert_wipe(long mmview)  {
     long previous = mmview_migrate(mmview);
     // printf("%ld -> %ld\n",  previous, mmview);
-    if (wipe) cte_wipe();
     bool ret = check_cert();
     int rc = mmview_migrate(previous); (void) rc;
     // printf("%ld -> %ld (%ld)\n",  mmview, rc, previous);
@@ -139,8 +138,7 @@ int main(int argc, char *argv[]) {
 
 
     // And now with mmview and libcte
-    cte_init(CTE_STRICT_CALLGRAPH);
-    //cte_init(0);
+    cte_init(CTE_STRICT_CALLGRAPH | CTE_STRICT_CTEMETA);
     cte_mmview_unshare();
     long global_mmview, ssl_mmview;
     long previous;
@@ -149,11 +147,28 @@ int main(int argc, char *argv[]) {
     global_mmview = mmview_current();
     ssl_mmview = mmview_create();
 
-    check_cert_wipe(ssl_mmview, true);
+    // Prepare Function mmview
+    {
+        cte_rules *R = cte_rules_init(CTE_KILL);
+        unsigned x = 0;
+        x += cte_rules_set_indirect(R, CTE_WIPE);
+        x += cte_rules_set_func(R, CTE_WIPE, &check_cert_wipe, 1);
+        cte_rules_set_func(R, CTE_LOAD, &check_cert_wipe, 0);
+        // cte_rules_set_func(R, CTE_LOAD, &check_cert_mprotect, 0);
+        printf("CTE_WIPE: %d funcs\n", x);
+
+        long previous = mmview_migrate(ssl_mmview);
+        cte_wipe_rules(R);
+        mmview_migrate(previous);
+        cte_rules_free(R);
+    }
+
+
+    check_cert_wipe(ssl_mmview);
     for (unsigned _i = 0; _i < repeat; _i ++) {
         clock_gettime(CLOCK_REALTIME, &ts0);
         for (unsigned i = 0; i < SSL_ROUNDS; i++) {
-            check_cert_wipe(ssl_mmview, false);
+            check_cert_wipe(ssl_mmview);
         }
         clock_gettime(CLOCK_REALTIME, &ts1);
         fprintf(stderr, "ssl,migrate,%f,%d\n", timespec_diff_ns(ts0, ts1) / 1e6, SSL_ROUNDS);

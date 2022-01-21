@@ -18,29 +18,37 @@ SOURCES = $(wildcard *.c)
 OBJECTS = $(patsubst %,%.o,$(basename $(SOURCES)))
 PRODUCT = test test-subset repeated empty ssl img
 
+CTEMETA = ctemeta
+
 .PHONY: clean always
 
 all: ${PRODUCT}
 
 test: test.o other.o $(LIBRARY)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+	${CTEMETA} $@ $@.cte
+
 
 test-subset: test-subset.o  $(LIBRARY_MINIMAL)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+	${CTEMETA} $@ $@.cte
 
 repeated: repeated.o $(LIBRARY)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
 
 empty: empty.o $(LIBRARY_MINIMAL)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS}
+	${CTEMETA} $@ $@.cte
+
 
 ssl: ssl.o  $(LIBRARY_MINIMAL)
 	$(CC) $(LDFLAGS) $^ -o $@ ${LIBS} -lssl -lcrypto
+	${CTEMETA} $@ $@.cte
 
 
 img: img.o  $(LIBRARY_MINIMAL)
 	$(CXX) $(LDFLAGS) $^ -o $@ ${LIBS} -ljpeg
-
+	${CTEMETA} $@ $@.cte
 
 $(LIBRARY) $(LIBRARY_MINIMAL): always
 	$(MAKE) -C $(LIBRARY_DIR)

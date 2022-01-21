@@ -22,6 +22,9 @@ enum cte_flags {
 #define  CTE_KILL   3
 #define  CTE_SYSTEM_FORCE  0x40
 #define  CTE_FORCE  0x80
+#define  CTE_FLAG_VISITED  0x20
+#define  CTE_FLAG_MASK  (CTE_SYSTEM_FORCE | CTE_FORCE | CTE_FLAG_VISITED)
+
 
 typedef unsigned char cte_wipe_policy;
 typedef struct cte_rules {
@@ -38,7 +41,7 @@ cte_rules *cte_rules_init(cte_wipe_policy def);
 void cte_rules_free(cte_rules *);
 unsigned cte_rules_set(cte_rules *,  cte_wipe_policy pol);
 unsigned cte_rules_set_func(cte_rules *, cte_wipe_policy pol,  void *func, char children);
-
+unsigned cte_rules_set_indirect(cte_rules *, cte_wipe_policy pol);
 
 int cte_init(int flags);
 
