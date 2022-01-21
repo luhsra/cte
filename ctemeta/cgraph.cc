@@ -53,8 +53,19 @@ static Function *make_plt_function(Cte *cte, Section *scn, addr_t vaddr) {
     // There may be already a plt-Function,
     // because containing_function does not find zero-sized symbols.
     if (!cte->functions.count(vaddr)) {
-        Function newfn { "<plt entry>", vaddr, 0, false };
+        Function newfn { "<plt entry>", vaddr, 0, false, false };
         newfn.section = scn->vaddr;
+        cte->functions[vaddr] = newfn;
+    }
+    return &cte->functions[vaddr];
+}
+
+static Function *make_extern_function(Cte *cte, Relocation &r) {
+    // The value of an external function is the place of the relocation
+    // and not its value (which is 0 in most cases)
+    addr_t vaddr = r.offset;
+    if (!cte->functions.count(vaddr)) {
+        Function newfn { "<extern ref: " + r.sym_name + ">", vaddr, 0, false, true };
         cte->functions[vaddr] = newfn;
     }
     return &cte->functions[vaddr];
@@ -178,15 +189,19 @@ void Cte::analyze() {
     // Relocations
     for (auto it = relocations.begin(); it != relocations.end(); it++) {
         Function *fn;
-        if (!functions.count(it->value)) {
-            warn("Missing function symbol at 0x%lx: relocation at 0x%lx\n",
-                 it->value, it->offset);
-            continue;
+        if (it->extern_ref) {
+            fn = make_extern_function(this, *it);
+            debug("Extern reference to %s: relocation at 0x%lx\n",
+                  it->sym_name.c_str(), it->offset);
+        } else {
+            if (!functions.count(it->value)) {
+                warn("Missing function symbol at 0x%lx: relocation at 0x%lx\n",
+                     it->value, it->offset);
+                continue;
+            }
+            fn = &functions[it->value];
         }
-        fn = &functions[it->value];
-
-        if (!it->plt && !it->got)
-            fn->address_taken = true;
+        fn->address_taken = true;
     }
 
     // Functions

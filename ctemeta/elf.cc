@@ -55,7 +55,7 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
 
                 addr_t vaddr = sym.st_value;
                 addr_t size = sym.st_size;
-                Function f { name, vaddr, size, true };
+                Function f { name, vaddr, size, true, false };
                 if (map.count(vaddr) == 0) {
                     map[vaddr] = f;
                 } else {
@@ -230,8 +230,8 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                 GElf_Xword rel_type = GELF_R_TYPE(rel.r_info);
                 addr_t offset = rel.r_offset;
                 addr_t value;
-                bool plt = (rel_type == R_X86_64_JUMP_SLOT);
-                bool got = (rel_type == R_X86_64_GLOB_DAT);
+                bool extern_ref = false;
+                const char *sym_name = "";
                 uint64_t symbol_idx = GELF_R_SYM(rel.r_info);
 
                 // Ignore relocations in cte sections
@@ -247,8 +247,7 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
 
                 // Process relocations and calculate values
                 if (rel_type == R_X86_64_64 ||
-                    rel_type == R_X86_64_GLOB_DAT ||
-                    rel_type == R_X86_64_JUMP_SLOT) {
+                    rel_type == R_X86_64_GLOB_DAT) {
                     if (symbol_idx == 0)
                         error(Error::ELF, "Unexpected relocation data: "
                               "idx: %d, type: %lu, sym_idx: 0, addend: 0x%lx\n",
@@ -266,24 +265,12 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                         continue;
                     }
 
+                    extern_ref = (sym.st_shndx == SHN_UNDEF);
+
                     // Name of the symbol
                     GElf_Shdr symtab_shdr;
                     gelf_getshdr(symtab_scn, &symtab_shdr);
-                    char *name = elf_strptr(elf, symtab_shdr.sh_link, sym.st_name);
-
-                    if (sym.st_shndx == SHN_UNDEF) {
-                        // This symbol is located in another object
-
-                        // This is a direct reference (no plt incirection) to a
-                        // function in another ELF object.
-                        // FIXME: Handling this would require rearranging some
-                        //        data structures
-                        if (rel_type == R_X86_64_64)
-                            warn("Direct reference to an undefined function: %s\n",
-                                  name);
-
-                        continue;
-                    }
+                    sym_name = elf_strptr(elf, symtab_shdr.sh_link, sym.st_name);
 
                     value = sym.st_value + rel.r_addend;
 
@@ -310,7 +297,8 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                          i, rel_type, rel.r_addend);
                     continue;
 
-                } else if (rel_type == R_X86_64_TPOFF64) {
+                } else if (rel_type == R_X86_64_TPOFF64 ||
+                           rel_type == R_X86_64_JUMP_SLOT) {
                     debug("Ignore relocation: idx: %d, type: %lu\n", i, rel_type);
                     continue;
 
@@ -320,15 +308,15 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                     continue;
                 }
 
-                if (!(value >= text_start && value < text_end)) {
-                    // Relocation does not target the executable segment.
+                if (!(extern_ref || (value >= text_start && value < text_end))) {
+                    // Relocation target is not external and does not target the code.
                     continue;
                 }
 
-                debug("Relevant relocation [%d] at 0x%lx, vlaue: 0x%lx, type: %lu\n",
-                      i, offset, value, rel_type);
+                debug("Relevant relocation [%d] at 0x%lx, vlaue: 0x%lx (%s), type: %lu\n",
+                      i, offset, value, sym_name, rel_type);
 
-                vec.push_back({ offset, value, plt, got });
+                vec.push_back({ offset, value, extern_ref, sym_name });
             }
         }
     }

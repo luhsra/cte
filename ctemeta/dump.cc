@@ -92,7 +92,8 @@ std::vector<uint8_t> Cte::dump() {
             .flags = (uint32_t)((fn.definition << 0) |
                                 (fn.address_taken << 1) |
                                 (fn.has_indirect_calls << 2) |
-                                (fn.has_indirect_jumps << 3)),
+                                (fn.has_indirect_jumps << 3) |
+                                (fn.extern_ref << 4)),
         };
         p_fn += sizeof(cte_meta_function);
     }

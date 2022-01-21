@@ -253,8 +253,11 @@ static bool cte_is_plt(void *addr) {
     return false;
 }
 
-static void *cte_decode_if_plt(void *entry) {
-    void *addr = entry;
+static void *cte_meta_decode_vaddr(cte_meta_function *fn) {
+    void *addr = fn->vaddr;
+    if (fn->flags & FLAG_EXTERN_REF)
+        addr = *((void**)addr);
+
     while (cte_is_plt(addr)) { // Multi-level plt indirections exist!
         uint8_t *a = (uint8_t*)addr;
         if (a[0] != 0xff)
@@ -422,7 +425,7 @@ static void cte_meta_assign(void) {
         cte_meta_function *end = start + text->meta->functions_count;
         for (cte_meta_function *meta = start; meta < end; meta++) {
             void *org_addr = meta->vaddr;
-            meta->vaddr = cte_decode_if_plt(meta->vaddr);
+            meta->vaddr = cte_meta_decode_vaddr(meta);
             cte_function *fn = cte_find_function(meta->vaddr);
             if (!fn) {
                 // Ignore VDSO functions

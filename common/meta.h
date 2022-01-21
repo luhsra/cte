@@ -3,12 +3,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static const uint32_t CTE_VERSION = 2;
+static const uint32_t CTE_VERSION = 3;
 
 static const uint32_t FLAG_DEFINITION = (1 << 0);
 static const uint32_t FLAG_ADDRESS_TAKEN = (1 << 1);
 static const uint32_t FLAG_INDIRECT_CALLS = (1 << 2);
 static const uint32_t FLAG_INDIRECT_JUMPS = (1 << 3);
+static const uint32_t FLAG_EXTERN_REF = (1 << 4);
 static const uint32_t FLAG_VISITED = (1 << 31);
 
 typedef struct cte_meta_function {

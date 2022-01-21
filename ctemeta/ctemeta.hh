@@ -19,6 +19,7 @@ struct Function {
     bool address_taken;
     bool has_indirect_calls;
     bool has_indirect_jumps;
+    bool extern_ref; // Function not defined here and no plt entry
     bool visited;    // Auxiliary flag for propagate functions
 
     std::set<addr_t> siblings;
@@ -29,13 +30,14 @@ struct Function {
     Function()
         : name(""), vaddr(0), size(0), section(0), definition(false),
           address_taken(false), has_indirect_calls(false),
-          has_indirect_jumps(false), visited(false) {}
+          has_indirect_jumps(false), extern_ref(false), visited(false) {}
 
-    Function(std::string name, addr_t vaddr, addr_t size, bool definition)
+    Function(std::string name, addr_t vaddr, addr_t size, bool definition,
+             bool extern_ref)
         : name(name), vaddr(vaddr), size(size), section(0),
           definition(definition), address_taken(false),
           has_indirect_calls(false), has_indirect_jumps(false),
-          visited(false) {}
+          extern_ref(extern_ref), visited(false) {}
 
     bool merge(Function &other);
 
@@ -56,16 +58,18 @@ struct Section {
 };
 
 struct Relocation {
-    addr_t offset;       // where is the relocation (vaddr)
-    addr_t value;        // what does the relocation refer to (vaddr)
-    bool plt;            // relocation inside a PLT
-    bool got;            // relocation inside a GOT
+    addr_t offset;        // where is the relocation (vaddr)
+    addr_t value;         // what does the relocation refer to (vaddr)
+    bool extern_ref;      // relocations points to an external reference
+    std::string sym_name; // Name of the target symbol if existing
 
     Relocation()
-        : offset(0), value(0), plt(false), got(false) {}
+        : offset(0), value(0), extern_ref(false) {}
 
-    Relocation(addr_t offset, addr_t vaddr, bool plt, bool got)
-        : offset(offset), value(vaddr), plt(plt), got(got) {}
+    Relocation(addr_t offset, addr_t vaddr, bool extern_ref,
+               std::string sym_name)
+        : offset(offset), value(vaddr), extern_ref(extern_ref),
+          sym_name(sym_name) {}
 };
 
 struct Cte {
