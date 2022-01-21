@@ -86,8 +86,6 @@ void Cte::analyze_function(Function &fn) {
                     ZydisCalcAbsoluteAddress(&inst, &op, pc, &target);
                     register_address_taken(fn, pc, target);
                 }
-                // TODO:  Absolute addressing (mov)
-                // FIXME: This can lead to false positives
             }
         }
 

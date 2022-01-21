@@ -147,10 +147,6 @@ void Cte::register_address_taken(Function &sender, addr_t source, addr_t target)
         Section *scn = containing_section(target);
         if (scn && scn->is_plt) {
             fn = make_plt_function(this, scn, target);
-
-            debug("Register address taken of %lx plt (%s) at %s+0x%lx\n",
-                  target, scn->name.c_str(), sender.name.c_str(),
-                  source - sender.vaddr);
         } else {
             warn("Ignore address taken of unknown location 0x%lx at %s+0x%lx\n",
                  target, sender.name.c_str(), source - sender.vaddr);

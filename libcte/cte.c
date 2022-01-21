@@ -282,7 +282,7 @@ static cte_meta_header *cte_meta_init(void *data, size_t size,
         cte_die("Invalid meta info: %s\n", filename);
 
     if (header->version != CTE_VERSION)
-        cte_die("%s: Unexpected meta info version: %u (expected: %u)",
+        cte_die("%s: Unexpected meta info version: %u (expected: %u)\n",
                 filename, header->version, CTE_VERSION);
 
     if (size != header->size)
