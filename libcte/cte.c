@@ -1080,6 +1080,7 @@ typedef enum cte_callsite_type {
     CALLSITE_TYPE_INDIRECT,
     CALLSITE_TYPE_DIRECT_OR_INDIRECT,
     CALLSITE_TYPE_INVALID,
+    CALLSITE_TYPE_SIGRETURN, 
 } cte_callsite_type;
 
 CTE_ESSENTIAL
@@ -1122,13 +1123,6 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
         (EXT_MOD(b[-6]) == 2 && EXT_RM(b[-6]) == 4)) {
         indirect = true;
     }
-    if (/* mov 0xf, rax */
-           b[0] == 0x48 && b[1] == 0xc7 && b[2] == 0xc0 && b[3] == 0x0f
-        && b[4] == 0    && b[5] == 0    && b[6] == 0
-        /* syscall */
-        && b[7] == 0xf  && b[8] == 0x05) {
-        signal = true;
-    }
     // GCC does not use far indirect calls (EXT_MOD=3)
 
     // direct call
@@ -1136,12 +1130,32 @@ static cte_callsite_type cte_decode_callsite(void *post_call_addr) {
         direct = true;
     // GCC does not use the callf instruction (Opcode 0x9a)
 
+    if (!(indirect || direct)) {
+        // It could be the signal handler resturn after our return.
+        cte_function* f = cte_find_function(post_call_addr);
+        // cte_printf("Return to Function Entry: %p\n", post_call_addr);
+        if (f && cte_func_state(f) == CTE_WIPE) {
+            b = f->body;
+        }
+
+        if (/* mov 0xf, rax */
+            b[0] == 0x48 && b[1] == 0xc7 && b[2] == 0xc0 && b[3] == 0x0f
+            && b[4] == 0    && b[5] == 0    && b[6] == 0
+            /* syscall */
+            && b[7] == 0xf  && b[8] == 0x05) {
+            signal = true;
+        }
+    }
+
     if (indirect && direct)
         return CALLSITE_TYPE_DIRECT_OR_INDIRECT;
-    if (indirect || signal)
+    if (indirect)
         return CALLSITE_TYPE_INDIRECT;
     if (direct)
         return CALLSITE_TYPE_DIRECT;
+    if (signal)
+        return CALLSITE_TYPE_SIGRETURN;
+
     return CALLSITE_TYPE_INVALID;
 
 #undef EXT_REG
@@ -1199,10 +1213,10 @@ int cte_restore(void *addr, void *post_call_addr) {
         cte_die("Bsearch yielded a different result...\n");
     */
 
-    cte_callsite_type type = cte_decode_callsite(post_call_addr);
+
 
     if (!f->disable_caller_validation) {
-        type = cte_decode_callsite(post_call_addr);
+        cte_callsite_type type = cte_decode_callsite(post_call_addr);
         if (type == CALLSITE_TYPE_INVALID) {
             cte_printf("WARNING: Invalid Callsite (callee %s): ", f->name);
             unsigned char *s = post_call_addr;
@@ -1217,20 +1231,20 @@ int cte_restore(void *addr, void *post_call_addr) {
             cte_printf("\n");
             /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
         }
-    }
 
-    if (strict_callgraph && !f->disable_caller_validation) {
-        // Find the caller
-        cte_function *cf = cte_find_containing_function(post_call_addr);
-        if (!cf) {
-            cte_debug_restore(addr, post_call_addr, f, cf);
-            cte_die("Caller not found: %p->%s\n", post_call_addr, f->name);
-        }
-
-        if (!cte_check_call(addr, f, cf)) {
-            // Failed to find the callee
-            cte_debug_restore(addr, post_call_addr, f, cf);
-            cte_die("Unrecognized callee (%s->%s)\n", cf->name, f->name);
+        if (strict_callgraph
+            && type != CALLSITE_TYPE_SIGRETURN) {
+            // Find the caller
+            cte_function *cf = cte_find_containing_function(post_call_addr);
+            if (!cf) {
+                cte_debug_restore(addr, post_call_addr, f, cf);
+                cte_printf("Caller not found: %p->%s\n", post_call_addr, f->name);
+                // FIXME: Die if caller comes from a known address
+            } else if (!cte_check_call(addr, f, cf)) {
+                // Failed to find the callee
+                cte_debug_restore(addr, post_call_addr, f, cf);
+                cte_die("Unrecognized callee (%s->%s)\n", cf->name, f->name);
+            }
         }
     }
 
@@ -1312,9 +1326,6 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     // FIXME: This should actually load the function
     if (policy == CTE_LOAD)
         cte_die("Policy CTE_LOAD is not yet implemented");
-
-    //if (strstr(fn->name, "cte"))
-        cte_printf("wipe: %s + %d\n", fn->name, fn->size);
 
     // CTE_WIPE|CTE_KILL: Wipe the whole function body
     if (policy == CTE_KILL) {
