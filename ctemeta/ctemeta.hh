@@ -39,7 +39,8 @@ struct Function {
           has_indirect_calls(false), has_indirect_jumps(false),
           extern_ref(extern_ref), visited(false) {}
 
-    bool merge(Function &other);
+    bool merge_same(Function &other);
+    bool merge_containing(Function &other);
 
     std::string str();
 };

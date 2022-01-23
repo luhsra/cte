@@ -4,13 +4,26 @@
 #include "ctemeta.hh"
 #include "util.hh"
 
-bool Function::merge(Function &other) {
-    if (vaddr == other.vaddr && size == other.size &&
-        siblings.empty() && other.siblings.empty() &&
-        callees.empty() && other.callees.empty() &&
-        jumpees.empty() && other.jumpees.empty()) {
+bool Function::merge_same(Function &other) {
+    if (vaddr == other.vaddr && (size == other.size ||
+                                 size == 0 || other.size == 0)) {
         address_taken = address_taken || other.address_taken;
         has_indirect_calls = has_indirect_calls || other.has_indirect_calls;
+        siblings.insert(other.siblings.begin(), other.siblings.end());
+        callees.insert(other.callees.begin(), other.callees.end());
+        jumpees.insert(other.jumpees.begin(), other.jumpees.end());
+        return true;
+    }
+    return false;
+}
+
+bool Function::merge_containing(Function &other) {
+    if (vaddr + size > other.vaddr) {
+        address_taken = address_taken || other.address_taken;
+        has_indirect_calls = has_indirect_calls || other.has_indirect_calls;
+        siblings.insert(other.siblings.begin(), other.siblings.end());
+        callees.insert(other.callees.begin(), other.callees.end());
+        jumpees.insert(other.jumpees.begin(), other.jumpees.end());
         return true;
     }
     return false;

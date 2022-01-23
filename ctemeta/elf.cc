@@ -46,10 +46,11 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                     continue;
                 if (sym.st_value < text_start || sym.st_value >= text_end)
                     continue;
-                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
+                    GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                     GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC) {
-                    warn("ELF: Ignore non-function symbol in text: %s\n",
-                         name.c_str());
+                    warn("ELF: Ignore non-function symbol (type: %u) in text: %s\n",
+                         GELF_ST_TYPE(sym.st_info), name.c_str());
                     continue;
                 }
 
@@ -59,7 +60,7 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                 if (map.count(vaddr) == 0) {
                     map[vaddr] = f;
                 } else {
-                    if (!map[vaddr].merge(f))
+                    if (!map[vaddr].merge_same(f))
                         error(Error::ELF,
                               "Differing redundant function symbols: %s, %s\n",
                               f.str().c_str(), map[vaddr].str().c_str());
@@ -88,7 +89,7 @@ static void enlarge_body(Section &sec, Function &fn, Function *next_fn) {
             error(Error::ELF, "ELF: Enlarge function body: %s: "
                   "Corrupt sizes. This should not happen.", fn.str().c_str());
 
-        if (fn.size != 0 && new_size >= fn.size + 32)
+        if (fn.size != 0 && new_size >= fn.size + 64)
             warn("ELF: Enlarge function body: %s: "
                  "Sanity warning: old size: 0x%lx, new size: 0x%lx\n",
                  fn.str().c_str(), fn.size, new_size);
@@ -145,14 +146,36 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
             auto end = functions.upper_bound(vaddr_end - 1);
             while (it != end) {
                 Function &fn = it->second;
-                it++;
-                Function *fn_next = (it != functions.end()) ? &it->second : nullptr;
+                Function *fn_next;
+                addr_t border;
+                bool merged;
+                do {
+                    merged = false;
+                    it++;
+                    fn_next = (it != functions.end()) ? &it->second : nullptr;
 
-                addr_t border = (it != end) ? it->second.vaddr : vaddr_end;
-                if (fn.vaddr + fn.size > border)
-                    error(Error::ELF,
-                          "Function %s exceeds next function or section end\n",
-                          fn.str().c_str());
+                    border = (fn_next) ? fn_next->vaddr : vaddr_end;
+                    if (fn_next && fn.vaddr + fn.size > border) {
+                        if (fn_next->size == 0) {
+                            // Merge zero sized symbols with an overlapping
+                            // previous symbol (special case for some libraries).
+                            // A call or jump to the merged symbol will cause a
+                            // sibling relationship.
+                            debug("ELF: Merge functions: %s and %s\n",
+                                  fn.str().c_str(), fn_next->str().c_str());
+                            fn.merge_containing(*fn_next);
+                            functions.erase(it--);
+                            merged = true;
+                        } else {
+                            error(Error::ELF,
+                                  "Function %s exceeds next function %s\n",
+                                  fn.str().c_str(), fn_next->str().c_str());
+                        }
+                    } else if (fn.vaddr + fn.size > border) {
+                        error(Error::ELF, "Function %s exceeds section end\n",
+                              fn.str().c_str());
+                    }
+                } while (merged);
 
                 fn.section = vaddr;
                 fn.definition = !is_plt;
