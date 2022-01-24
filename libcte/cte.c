@@ -1743,15 +1743,22 @@ static void cte_mark_loadable(bool *loadables, cte_function *function) {
         return;
 
     loadables[idx] = true;
-    loadables[function->sibling_idx] = true;
 
-    if (!function->meta)
-        function = cte_vector_get(&functions, function->sibling_idx);
     if (!function->meta)
         return;
 
     for (uint32_t i = 0; i < function->meta->callees_count; i++) {
         cte_function *cf = cte_get_function(function->meta->callees[i]);
+        cte_mark_loadable(loadables, cf);
+    }
+
+    for (uint32_t i = 0; i < function->meta->jumpees_count; i++) {
+        cte_function *cf = cte_get_function(function->meta->jumpees[i]);
+        cte_mark_loadable(loadables, cf);
+    }
+
+    for (uint32_t i = 0; i < function->meta->siblings_count; i++) {
+        cte_function *cf = cte_get_function(function->meta->siblings[i]);
         cte_mark_loadable(loadables, cf);
     }
 }
@@ -1798,30 +1805,11 @@ void cte_dump_state(int fd, unsigned flags) {
                 cte_die("mmap failed");
             }
 
-            int xno = 0;
-            int xyes = 0;
-            int sibl = 0;
             for (uint32_t i = 0; i < functions.length; i++) {
                 cte_function *f = cte_vector_get(&functions, i);
-                cte_function *sibling = (f->sibling_idx != FUNC_ID_INVALID)
-                    ? (cte_vector_get(&functions, f->sibling_idx)) : NULL;
-                if (f->text_idx == 6) {
-                    /* cte_text *t = cte_vector_get(&texts, f->text_idx); */
-                    /* cte_printf("INFO FN: %d  %s :: %s\n", (!!f->info_fn), t->filename, f->name); */
-                    if (f->meta)
-                        xyes++;
-                    else
-                        xno++;
-                    if (f->sibling_idx != FUNC_ID_INVALID)
-                        sibl++;
-                }
-                loadables[i] = !(f->meta || (sibling && sibling->meta));
-                /* if (f->info_fn) { */
-                /*     loadables[i] ||= f->info_fn->flags | FLAG_ADDRESS_TAKEN; */
-                /* } */
+                loadables[i] = !f->meta;
             }
-            cte_printf(" INFO FN yes: %d, no: %d, siblings: %d\n", xyes, xno, sibl);
-            /* cte_mark_loadable(loadables, cte_stat.last_wipe_function); */
+            cte_mark_loadable(loadables, cte_stat.last_wipe_function);
         }
 #endif
 
