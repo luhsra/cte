@@ -1,14 +1,9 @@
 #!/bin/bash
 
 elf=$1
+CTE_ARGS=-lwarn
 
 ldd $elf | sed 's/ (.*//; s/.*=>[\t ]*//;' | grep -v vdso | while read l; do
-    # NOSHRINK: libcrypto.so.1.1
-    base=$(basename $l)
-    CTE_ARGS=""
-    if grep -q "NOSHRINK: $base" $0; then
-        CTE_ARGS="${CTE_ARGS} -k"
-    fi
     echo ctemeta ${CTE_ARGS} $l $l.cte
     ctemeta ${CTE_ARGS} $l $l.cte
 done
