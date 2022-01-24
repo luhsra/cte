@@ -1450,9 +1450,13 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
 
     // CTE_WIPE|CTE_KILL: Wipe the whole function body
     if (policy == CTE_KILL) {
+        if (fn->size < 1) { // We need at last 1 byte to wipe it
+            return 0;
+        }
         cte_memset(fn->vaddr,
                    0xcc, // int3 int3 int3...
                    fn->size);
+        return 1;
     } else if (policy == CTE_WIPE ) {
         if (fn->size < sizeof(cte_implant)) {
             cte_text *text = cte_vector_get(&texts, fn->text_idx);
