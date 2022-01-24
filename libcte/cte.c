@@ -513,17 +513,21 @@ static void cte_meta_assign(void) {
         // Allocate and initialize a new meta object
         size_t i_meta = data_size;
         size_t i_callees = i_meta + sizeof(cte_meta_function);
-        size_t i_siblings = i_callees + set.length * sizeof(uint32_t);
+        size_t i_jumpees = i_callees + set.length * sizeof(uint32_t);
+        size_t i_siblings = i_jumpees + fn->meta->jumpees_count * sizeof(uint32_t);
         data_size = i_siblings + fn->meta->siblings_count * sizeof(uint32_t);
         while (data_size > data_capacity) {
             cte_mmap_inc((void*)(&data), &data_capacity);
         }
         cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
         uint32_t *callees = (uint32_t*)(&data[i_callees]);
+        uint32_t *jumpees = (uint32_t*)(&data[i_jumpees]);
         uint32_t *siblings = (uint32_t*)(&data[i_siblings]);
         *meta = *fn->meta;
         memcpy(callees, set.front, set.length * sizeof(uint32_t));
         meta->callees_count = set.length;
+        memcpy(jumpees, fn->meta->jumpees,
+               fn->meta->jumpees_count * sizeof(uint32_t));
         memcpy(siblings, fn->meta->siblings,
                fn->meta->siblings_count * sizeof(uint32_t));
         cte_pset_free(&set);
@@ -536,11 +540,11 @@ static void cte_meta_assign(void) {
         size_t i_meta = data_idx;
         cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
         size_t i_callees = i_meta + sizeof(cte_meta_function);
-        size_t i_siblings = i_callees + meta->callees_count * sizeof(uint32_t);
+        size_t i_jumpees = i_callees + meta->callees_count * sizeof(uint32_t);
+        size_t i_siblings = i_jumpees + meta->jumpees_count * sizeof(uint32_t);
         data_idx = i_siblings + meta->siblings_count * sizeof(uint32_t);
         meta->callees = (uint32_t*)(&data[i_callees]);
-        meta->jumpees = NULL;
-        meta->jumpees_count = 0;
+        meta->jumpees = (uint32_t*)(&data[i_jumpees]);
         meta->siblings = (uint32_t*)(&data[i_siblings]);
         fn->meta = meta;
     }
