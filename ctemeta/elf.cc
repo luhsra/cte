@@ -40,6 +40,7 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                 GElf_Sym sym;
                 gelf_getsym(data, i, &sym);
                 std::string name = elf_strptr(elf, shdr.sh_link, sym.st_name);
+                bool no_code = false;
 
                 // Only defined functions
                 if (sym.st_shndx == SHN_UNDEF)
@@ -51,18 +52,19 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                     GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC) {
                     warn("ELF: Ignore non-function symbol (type: %u) in text: %s\n",
                          GELF_ST_TYPE(sym.st_info), name.c_str());
-                    continue;
+                    no_code = true;
                 }
 
                 addr_t vaddr = sym.st_value;
                 addr_t size = sym.st_size;
                 Function f { name, vaddr, size, true, false };
+                f.no_code = no_code;
                 if (map.count(vaddr) == 0) {
                     map[vaddr] = f;
                 } else {
                     if (!map[vaddr].merge_same(f))
                         error(Error::ELF,
-                              "Differing redundant function symbols: %s, %s\n",
+                              "Differing function symbols to the same address: %s, %s\n",
                               f.str().c_str(), map[vaddr].str().c_str());
                 }
             }
@@ -76,7 +78,7 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
 }
 
 static void enlarge_body(Section &sec, Function &fn, Function *next_fn) {
-    if (fn.definition) {
+    if (fn.definition && !fn.no_code) {
         // Enlarge to the start of the nex function
         addr_t new_size = (next_fn) ? (next_fn->vaddr - fn.vaddr) : fn.size;
 
@@ -156,7 +158,8 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
 
                     border = (fn_next) ? fn_next->vaddr : vaddr_end;
                     if (fn_next && fn.vaddr + fn.size > border) {
-                        if (fn_next->size == 0) {
+                        if (!fn.no_code && !fn_next->no_code &&
+                            fn_next->size == 0) {
                             // Merge zero sized symbols with an overlapping
                             // previous symbol (special case for some libraries).
                             // A call or jump to the merged symbol will cause a
@@ -168,11 +171,11 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
                             merged = true;
                         } else {
                             error(Error::ELF,
-                                  "Function %s exceeds next function %s\n",
+                                  "Function/object %s exceeds next function %s\n",
                                   fn.str().c_str(), fn_next->str().c_str());
                         }
                     } else if (fn.vaddr + fn.size > border) {
-                        error(Error::ELF, "Function %s exceeds section end\n",
+                        error(Error::ELF, "Function/object %s exceeds section end\n",
                               fn.str().c_str());
                     }
                 } while (merged);
@@ -184,6 +187,13 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
                 fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
             }
         }
+    }
+
+    // Remove no-code functions
+    for (auto it = functions.begin(); it != functions.end(); it++) {
+        Function &fn = it->second;
+        if (fn.no_code)
+            functions.erase(it--);
     }
 
     for (auto &item : functions) {

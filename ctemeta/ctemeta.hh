@@ -20,6 +20,7 @@ struct Function {
     bool has_indirect_calls;
     bool has_indirect_jumps;
     bool extern_ref; // Function not defined here and no plt entry
+    bool no_code;    // no valid function, placeholder for other object in text
     bool visited;    // Auxiliary flag for propagate functions
 
     std::set<addr_t> siblings;
@@ -30,14 +31,15 @@ struct Function {
     Function()
         : name(""), vaddr(0), size(0), section(0), definition(false),
           address_taken(false), has_indirect_calls(false),
-          has_indirect_jumps(false), extern_ref(false), visited(false) {}
+          has_indirect_jumps(false), extern_ref(false),
+          no_code(false), visited(false) {}
 
     Function(std::string name, addr_t vaddr, addr_t size, bool definition,
              bool extern_ref)
         : name(name), vaddr(vaddr), size(size), section(0),
           definition(definition), address_taken(false),
           has_indirect_calls(false), has_indirect_jumps(false),
-          extern_ref(extern_ref), visited(false) {}
+          extern_ref(extern_ref), no_code(false), visited(false) {}
 
     bool merge_same(Function &other);
     bool merge_containing(Function &other);

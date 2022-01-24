@@ -161,16 +161,25 @@ void Cte::register_address_taken(Function &sender, addr_t source, addr_t target)
         if (scn && scn->is_plt) {
             fn = make_plt_function(this, scn, target);
         } else {
-            warn("Ignore address taken of unknown location 0x%lx at %s+0x%lx\n",
-                 target, sender.name.c_str(), source - sender.vaddr);
+            debug("Ignore address taken of unknown location 0x%lx at %s+0x%lx\n",
+                  target, sender.name.c_str(), source - sender.vaddr);
             return;
         }
     }
 
     if (target != fn->vaddr) {
-        warn("Ignore address taken of non function start %s+0x%lx at %s+0x%lx\n",
-             fn->name.c_str(), target - fn->vaddr,
-             sender.name.c_str(), source - sender.vaddr);
+        if (sender.vaddr != fn->vaddr) {
+            warn("Address taken of non function start "
+                 "%s+0x%lx at %s+0x%lx; registered as sibling\n",
+                 fn->name.c_str(), target - fn->vaddr,
+                 sender.name.c_str(), source - sender.vaddr);
+            sender.siblings.insert(fn->vaddr);
+        } else {
+            warn("Address taken of non function start "
+                 "%s+0x%lx at %s+0x%lx\n",
+                 fn->name.c_str(), target - fn->vaddr,
+                 sender.name.c_str(), source - sender.vaddr);
+        }
         return;
     }
 
@@ -196,26 +205,27 @@ void Cte::register_indirect_jump(Function &fn, addr_t source) {
 
 void Cte::analyze() {
     // Relocations
-    for (auto it = relocations.begin(); it != relocations.end(); it++) {
+    for (auto &reloc : relocations) {
         Function *fn;
-        if (it->extern_ref) {
-            fn = make_extern_function(this, *it);
+        if (reloc.extern_ref) {
+            fn = make_extern_function(this, reloc);
             debug("Extern reference to %s: relocation at 0x%lx\n",
-                  it->sym_name.c_str(), it->offset);
+                  reloc.sym_name.c_str(), reloc.offset);
         } else {
-            if (!functions.count(it->value)) {
+            if (!functions.count(reloc.value)) {
                 warn("Missing function symbol at 0x%lx: relocation at 0x%lx\n",
-                     it->value, it->offset);
+                     reloc.value, reloc.offset);
                 continue;
             }
-            fn = &functions[it->value];
+            fn = &functions[reloc.value];
         }
         fn->address_taken = true;
     }
 
     // Functions
-    for (auto it = functions.begin(); it != functions.end(); it++) {
-        analyze_function(it->second);
+    for (auto &item : functions) {
+        auto &fn = item.second;
+        analyze_function(fn);
     }
 }
 
