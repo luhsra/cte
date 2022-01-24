@@ -292,7 +292,11 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                     GElf_Sym sym;
                     gelf_getsym(symtab_data, symbol_idx, &sym);
 
-                    if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                    // Also look at STT_NOTYPE, these are functions sometimes.
+                    // Symbols which are not in any text segment will be ignored
+                    // by libcte (see cte_meta_assign)
+                    if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
+                        GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                         GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
                         continue;
 
@@ -326,7 +330,8 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                               i, rel_type, rel.r_addend);
                     GElf_Sym sym;
                     gelf_getsym(symtab_data, symbol_idx, &sym);
-                    if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                    if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
+                        GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                         GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
                         continue;
                     warn("Unsupported relocation: "
