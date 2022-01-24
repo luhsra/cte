@@ -34,7 +34,7 @@ int main(void) {
     cte_enable_threshold();
 
     for (unsigned i = 0; i < 50; i++) {
-        int wiped = cte_wipe_rules(rules);
+        int wiped = cte_wipe(rules);
 
         int a;
         a += func1();

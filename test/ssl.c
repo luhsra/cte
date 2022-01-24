@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
         printf("CTE_WIPE: %d funcs\n", x);
 
         long previous = mmview_migrate(ssl_mmview);
-        cte_wipe_rules(R);
+        cte_wipe(R);
         mmview_migrate(previous);
         cte_rules_free(R);
     }

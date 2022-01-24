@@ -41,11 +41,11 @@ int main(void) {
 
     cte_rules *R1 = cte_rules_init(CTE_WIPE);
 
-    cte_wipe_rules(R0);
+    cte_wipe(R0);
 
     bar();
 
-    cte_wipe_rules(R1);
+    cte_wipe(R1);
 
     cte_dump_state(0, CTE_DUMP_TEXTS);
 

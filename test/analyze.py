@@ -29,7 +29,8 @@ def analyze(data):
         return
     texts = pd.DataFrame(data['texts'], columns=["text_idx", "filename", "bytes"])
     texts.set_index('text_idx', inplace=True)
-    funcs = pd.DataFrame(data['functions'], columns=["text_idx", "name", "bytes", "offset", "loaded", "essential", "restore_time"])
+    funcs = pd.DataFrame(data['functions'], columns=["text_idx", "name", "bytes", "offset", "state", "essential", "restore_time", "loadable"])
+    funcs['loaded'] = funcs.state == 1 # CTE_LOAD
 
     x = funcs.groupby(["text_idx", "loaded"])['bytes'].agg([sum,len]).unstack()
     x.columns = ["%s_%s" % col for col in x.columns.values]
@@ -40,7 +41,6 @@ def analyze(data):
     df['sum_Total'] = df.sum_False + df.sum_True
     df['len_Total'] = df.len_False + df.len_True
 
-
     df['loaded %'] = (df.bytes - df.sum_False)/df.bytes
     df['wipeable %'] = (df.sum_True + df.sum_False)/df.bytes
     df['unwipeable'] = df.bytes - df.sum_Total
@@ -50,12 +50,14 @@ def analyze(data):
     print("Total bytes loaded (%):",   (sum(df.bytes) - sum(df.sum_False))/ sum(df.bytes))
     print("Wipeable bytes loaded (%):", (sum(df.sum_True)/sum(df.sum_Total)))
     print("Wipeable funcs loaded (%):", (sum(df.len_True)/sum(df.len_Total)))
-    print("Restore (count/ms):", sum(df.len_True), sum(funcs.restore_time)/1e6)
+    print("Restore (count):", sum(df.len_True), data['restore_count'], data['restore_time']/1e6)
 
-    funcs['memfunc'] = funcs.name.map(lambda x: x.startswith('__mem'))
+    print(data.keys())
     
-    x = funcs[(funcs.loaded) & (~funcs.memfunc)][['text_idx', 'name', 'bytes']]
-    print(x.join(texts.reset_index()[['text_idx', 'filename']], on='text_idx',lsuffix="L"))
+    funcs['memfunc'] = funcs.name.map(lambda x: x.startswith('__mem'))
+
+    x = funcs[(~funcs.loaded) & (~funcs.memfunc)][['text_idx', 'name', 'bytes']]
+    # print(x.join(texts.reset_index()[['text_idx', 'filename']], on='text_idx',lsuffix="L"))
     print(len(x))
     print(sum(x.bytes))
 

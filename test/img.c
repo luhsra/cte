@@ -240,7 +240,7 @@ int main(int argc, char *argv[]) {
         cte_rules_set_func(R, CTE_LOAD, &loadJpegImageFile_mprotect, 0);
         printf("CTE_WIPE: %d funcs\n", x);
         long previous = mmview_migrate(img_mmview);
-        cte_wipe_rules(R);
+        cte_wipe(R);
         mmview_migrate(previous);
         cte_rules_free(R);
     }

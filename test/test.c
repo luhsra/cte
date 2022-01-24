@@ -67,7 +67,7 @@ int main(void) {
     cte_rules *R = cte_rules_init(CTE_KILL);
     cte_rules_set_func(R, CTE_WIPE, &main, 1);
     cte_rules_set_indirect(R, CTE_WIPE);
-    cte_wipe_rules(R);
+    cte_wipe(R);
 
     fnptr = testfnptr;
     test1();
