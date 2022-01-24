@@ -3,7 +3,10 @@
 elf=$1
 CTE_ARGS=-lwarn
 
-ldd $elf | sed 's/ (.*//; s/.*=>[\t ]*//;' | grep -v vdso | while read l; do
+( ldd $elf | sed 's/ (.*//; s/.*=>[\t ]*//;' | grep -v vdso; echo $elf ) | while read l; do
     echo ctemeta ${CTE_ARGS} $l $l.cte
     ctemeta ${CTE_ARGS} $l $l.cte
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
 done
