@@ -132,6 +132,7 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
             addr_t size = shdr.sh_size;
             uint8_t *buf = (uint8_t*)data->d_buf;
             bool is_plt = (name.rfind(".plt", 0) == 0);
+            bool is_fini = name == ".fini";
 
             if (map.count(vaddr) == 0) {
                 map[vaddr] = Section(name, vaddr, size, is_plt);
@@ -185,6 +186,9 @@ scan_sections(Elf *elf, std::map<addr_t, Function> &functions) {
                 if (!keep_sizes)
                     enlarge_body(map.at(vaddr), fn, fn_next);
                 fn.code.assign(&buf[fn.vaddr - vaddr], &buf[border - vaddr]);
+
+                if (is_fini)
+                    fn.address_taken = true;
             }
         }
     }

@@ -1061,7 +1061,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             {3, "_dl_relocate_object"},
 
             // We do not validate the caller of sigreturn and exit
-            {2, "__restore_rt"}, {2, "_dl_fini"}, {2, "_fini"},
+            {2, "__restore_rt"}, {2, "_dl_fini"},
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
