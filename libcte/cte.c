@@ -1061,7 +1061,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             {3, "_dl_relocate_object"},
 
             // We do not validate the caller of sigreturn and exit
-            {2, "__restore_rt"}, {2, "_dl_fini"},
+            {2, "__restore_rt"}, {2, "_dl_fini"}, {2, "_fini"}
         };
         for (unsigned i = 0; i < sizeof(names)/sizeof(*names); i++) {
             if (names[i].begin == 0 && strcmp(names[i].pattern, it->name) == 0) {
@@ -1470,6 +1470,8 @@ static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
                    fn->size);
         // FIXME: rax not preserved -> Cannot be fixed without library local tramploline
         cte_implant_init(implant, func_id(fn));
+    } else {
+        cte_die("Invalid Wipe mode: %s mode=%d\n", fn->name, policy);
     }
 
     return 1;
@@ -1694,13 +1696,13 @@ int cte_wipe(cte_rules *rules) {
                     wipe_count += 1;
                     wipe_bytes += f->size;
                 }
-            } else if (policy != CTE_LOAD ) {
+            } else if (policy != CTE_LOAD) {
                 // The function is still wiped, account for that
                 wipe_count += 1;
                 wipe_bytes += f->size;
             }
-            // WIPESTAT: Limit wipe statistics and Increment wipe counters
 #if CONFIG_THRESHOLD
+            // WIPESTAT: Limit wipe statistics and Increment wipe counters
             if (wipestat) {
                 if (wipestat[func_id(f)].wipe > 50000) {
                     wipestat[func_id(f)].wipe    /= 2;
@@ -1757,6 +1759,7 @@ static void cte_mark_loadable(bool *loadables, cte_function *function) {
 
 void cte_dump_state(int fd, unsigned flags) {
     cte_fdprintf(fd, "{\n");
+
 
 #define HEX32(x) ((x) >> 32), ((x) & 0xffffffff)
 #if CONFIG_STAT
