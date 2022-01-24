@@ -100,9 +100,6 @@ void Cte::register_call(Function &sender, addr_t source, addr_t target) {
         }
     }
 
-    if (fn->vaddr == sender.vaddr)
-        return;
-
     if (target != fn->vaddr) {
         sender.siblings.insert(fn->vaddr);
 
