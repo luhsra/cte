@@ -434,13 +434,6 @@ static void cte_meta_assign(void) {
                     meta->vaddr < vdso_start + vdso_size)
                     continue;
 
-                // Safely ignore extern_ref meta fns without an existing text.
-                // This can happen, because ctemeta also looks at relocations
-                // to STT_NOTYPE symbols which might not be functions,
-                // but sometimes are.
-                if (meta->flags & FLAG_EXTERN_REF)
-                    continue;
-
                 printf("Warning: Function not found: [%s] %p (<text>+%p) -> %p\n",
                        text->filename, org_addr,
                        (void*)(org_addr - text->vaddr), meta->vaddr);
@@ -662,8 +655,7 @@ cte_elf_scan_symbols(Elf *elf, cte_text * text, ElfW(Addr) dlpi_addr) {
                 // Only defined functions
                 if (sym.st_shndx == SHN_UNDEF)
                     continue;
-                if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
-                    GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                     GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
                     continue;
 

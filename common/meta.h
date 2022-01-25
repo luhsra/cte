@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static const uint32_t CTE_VERSION = 4;
+static const uint32_t CTE_VERSION = 5;
 
 static const uint32_t FLAG_DEFINITION = (1 << 0);
 static const uint32_t FLAG_ADDRESS_TAKEN = (1 << 1);

@@ -47,10 +47,14 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                     continue;
                 if (sym.st_value < text_start || sym.st_value >= text_end)
                     continue;
-                if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
-                    GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                if (GELF_ST_TYPE(sym.st_info) == STT_NOTYPE) {
+                    warn("ELF: Ignore non-typed symbol in text: %s\n",
+                         name.c_str());
+                    continue;
+                }
+                if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                     GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC) {
-                    warn("ELF: Ignore non-function symbol (type: %u) in text: %s\n",
+                    warn("ELF: Found non-function symbol (type: %u) in text: %s\n",
                          GELF_ST_TYPE(sym.st_info), name.c_str());
                     no_code = true;
                 }
@@ -292,11 +296,7 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                     GElf_Sym sym;
                     gelf_getsym(symtab_data, symbol_idx, &sym);
 
-                    // Also look at STT_NOTYPE, these are functions sometimes.
-                    // Symbols which are not in any text segment will be ignored
-                    // by libcte (see cte_meta_assign)
-                    if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
-                        GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                    if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                         GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
                         continue;
 
@@ -330,8 +330,7 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
                               i, rel_type, rel.r_addend);
                     GElf_Sym sym;
                     gelf_getsym(symtab_data, symbol_idx, &sym);
-                    if (GELF_ST_TYPE(sym.st_info) != STT_NOTYPE &&
-                        GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
+                    if (GELF_ST_TYPE(sym.st_info) != STT_FUNC &&
                         GELF_ST_TYPE(sym.st_info) != STT_GNU_IFUNC)
                         continue;
                     warn("Unsupported relocation: "
