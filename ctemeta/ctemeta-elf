@@ -1,9 +1,14 @@
 #!/bin/bash
 
 elf=$1
+KEEP_SIZES=("libcrypto.so.1.1")
 CTE_ARGS=-lwarn
 
 ( ldd $elf | sed 's/ (.*//; s/.*=>[\t ]*//;' | grep -v vdso; echo $elf ) | while read l; do
+    base=$(basename $l)
+    if [[ " ${KEEP_SIZES[*]} " =~ " $base " ]]; then
+        CTE_ARGS="$CTE_ARGS -k"
+    fi
     echo ctemeta ${CTE_ARGS} $l $l.cte
     ctemeta ${CTE_ARGS} $l $l.cte
     if [ $? -ne 0 ]; then
