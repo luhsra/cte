@@ -71,6 +71,8 @@ void cte_enable_threshold() {
 }
 #endif
 
+static void *cte_memset(void *dst, int pat, size_t n);
+
 struct build_id_note {
     ElfW(Nhdr) nhdr;
 
@@ -197,7 +199,6 @@ void cte_implant_init(cte_implant *ptr, unsigned _func_idx) {
         ptr->icall.icall[1] = 0xd0;
     }
     ptr->func_idx = (_func_idx);
-
 }
 
 CTE_ESSENTIAL
@@ -205,12 +206,14 @@ static
 bool cte_implant_valid(cte_implant *ptr) {
     // Is it a direct call?
     if (ptr && ptr->call.call[0] == 0xe8 &&
-        ptr->call.offset == (void*) cte_restore_entry - ((void*)ptr + 12))
+        ptr->call.offset == (void*) cte_restore_entry - ((void*)ptr + 12)) {
         return true;
+    }
     // Is it an indirect call?
-    if (ptr && ptr->icall.mov[0] == 0x48 && ptr->icall.mov[1] == 0xb8 && ptr->icall.mov_imm == (uint64_t)cte_restore_entry
-        && ptr->icall.icall[0] == 0xff && ptr->icall.icall[1] == 0xd0)
+    if (ptr && (ptr->icall.mov[0] == 0x48) && (ptr->icall.mov[1] == 0xb8) && (ptr->icall.mov_imm == (uint64_t)cte_restore_entry)
+        && (ptr->icall.icall[0] == 0xff) && (ptr->icall.icall[1] == 0xd0)) {
         return true;
+    }
 
     return false;
 }
@@ -254,6 +257,34 @@ static bool cte_is_plt(void *addr) {
     }
     return false;
 }
+
+/* Visited Flags per function.
+
+   We have to perform several (limited) depth-first searches on the
+   functions. For this, we require a visited. As resetting the flag
+   for each serch takes too long, we use a flag vector with one 16-bit
+   counter per function. Each time, we perform a new search, we
+   increment the current visited mark.
+ */
+static uint16_t *visited_flags;
+static uint16_t functions_visited_flag;
+#define FUNCTIONS_VISITED_FLAG_MAX ((1 << (sizeof(functions_visited_flag) * 8)) - 1)
+
+static void cte_reset_visited_flags(void) {
+    
+    if (visited_flags && (functions_visited_flag < FUNCTIONS_VISITED_FLAG_MAX)) {
+        // This is the common/hot path
+        functions_visited_flag++;
+    } else { // Cold path an Initialize
+        if (!visited_flags)
+            visited_flags = malloc(sizeof(*visited_flags) * functions.length);
+        functions_visited_flag  = 1;
+        cte_memset(visited_flags, 0, sizeof(*visited_flags) * functions.length);
+    }
+}
+#define cte_is_visited(fn)  (visited_flags[func_id(fn)] == functions_visited_flag)
+#define cte_set_visited(fn) do { visited_flags[func_id(fn)] = functions_visited_flag; } while(0)
+
 
 static void *cte_meta_decode_vaddr(cte_meta_function *fn) {
     void *addr = fn->vaddr;
@@ -364,18 +395,11 @@ static void cte_pset_free(cte_pset *pset) {
     free(pset->front);
 }
 
-static void cte_meta_reset_visited_flags(void) {
-    cte_function *fn;
-    for_each_cte_vector(&functions, fn) {
-        if (fn->meta)
-            fn->meta->flags &= ~FLAG_VISITED;
-    }
-}
 
 static void cte_meta_propagate_jumpees(cte_function *fn, cte_pset *pset) {
-    if (!fn || !fn->meta || fn->meta->flags & FLAG_VISITED)
+    if (!fn || !fn->meta || cte_is_visited(fn))
         return;
-    fn->meta->flags |= FLAG_VISITED;
+    cte_set_visited(fn);
 
     for (uint32_t i = 0; i < fn->meta->jumpees_count; i++) {
         cte_pset_insert(pset, fn->meta->jumpees[i]);
@@ -385,9 +409,9 @@ static void cte_meta_propagate_jumpees(cte_function *fn, cte_pset *pset) {
 }
 
 static void cte_meta_propagate_address_taken(cte_function *fn) {
-    if (fn->meta->flags & FLAG_VISITED)
+    if (cte_is_visited(fn))
         return;
-    fn->meta->flags |= FLAG_VISITED;
+    cte_set_visited(fn);
 
     for (uint32_t i = 0; i < fn->meta->jumpees_count; i++) {
         cte_function *jumpee = cte_get_function(fn->meta->jumpees[i]);
@@ -458,6 +482,7 @@ static void cte_meta_assign(void) {
         }
     }
 
+
     // Update callee, jumpee and sibling indices to global function indices
     for_each_cte_vector(&texts, text) {
         if (!text->meta)
@@ -486,7 +511,7 @@ static void cte_meta_assign(void) {
     }
 
     // Propagate FLAG_ADDRESS_TAKEN
-    cte_meta_reset_visited_flags();
+    cte_reset_visited_flags();
     for_each_cte_vector(&functions, fn) {
         if (fn->meta && (fn->meta->flags & FLAG_ADDRESS_TAKEN))
             cte_meta_propagate_address_taken(fn);
@@ -502,7 +527,7 @@ static void cte_meta_assign(void) {
 
         // Propagate and gather all callees from jumpees
         cte_pset set = EMPTY_PSET;
-        cte_meta_reset_visited_flags();
+        cte_reset_visited_flags();
         for (uint32_t i = 0; i < fn->meta->callees_count; i++) {
             cte_pset_insert(&set, fn->meta->callees[i]);
             cte_function *cfn = cte_get_function(fn->meta->callees[i]);
@@ -520,6 +545,7 @@ static void cte_meta_assign(void) {
         while (data_size > data_capacity) {
             cte_mmap_inc((void*)(&data), &data_capacity);
         }
+
         cte_meta_function *meta = (cte_meta_function*)(&data[i_meta]);
         uint32_t *callees = (uint32_t*)(&data[i_callees]);
         uint32_t *jumpees = (uint32_t*)(&data[i_jumpees]);
@@ -533,6 +559,8 @@ static void cte_meta_assign(void) {
                fn->meta->siblings_count * sizeof(uint32_t));
         cte_pset_free(&set);
     }
+
+
     // Assign newly created meta objects to the functions
     size_t data_idx = 0;
     for_each_cte_vector(&functions, fn) {
@@ -740,22 +768,23 @@ unsigned cte_rules_set_func_1(cte_rules *rules, cte_wipe_policy policy, cte_func
     while(idx > 0) {
         cte_function *cur = func_stack[--idx]; // pop
         cte_rules_set_func_0(rules, policy, cur);
-        rules->policy[func_id(cur)] |= CTE_FLAG_VISITED;
+        cte_set_visited(cur);
+
         ret++;
 
         for (unsigned i = 0; i < cur->meta->callees_count; i++) {
             cte_function *f = cte_vector_get(&functions, cur->meta->callees[i]);
-            if (f && !(rules->policy[func_id(f)] & CTE_FLAG_VISITED))
+            if (f && !cte_is_visited(f))
                 func_stack_push(f);
         }
         for (unsigned i = 0; i < cur->meta->jumpees_count; i++) {
             cte_function *f = cte_vector_get(&functions, cur->meta->jumpees[i]);
-            if (f && !(rules->policy[func_id(f)] & CTE_FLAG_VISITED))
+            if (f && !cte_is_visited(f))
                 func_stack_push(f);
         }
         for (unsigned i = 0; i < cur->meta->siblings_count; i++) {
             cte_function *f = cte_vector_get(&functions, cur->meta->siblings[i]);
-            if (f && !(rules->policy[func_id(f)] & CTE_FLAG_VISITED))
+            if (f && !cte_is_visited(f))
                 func_stack_push(f);
         }
     }
@@ -774,11 +803,8 @@ unsigned cte_rules_set_func(cte_rules *rules, cte_wipe_policy policy, void *fptr
     if (! func) return 0;
 
     if (children) {
+        cte_reset_visited_flags();
         ret += cte_rules_set_func_1(rules, policy, func);
-
-        for (unsigned i = 0; i < rules->length; i++) {
-            rules->policy[i] &= ~CTE_FLAG_VISITED;
-        }
     } else {
         cte_rules_set_func_0(rules, policy, func);
     }
@@ -790,6 +816,9 @@ unsigned cte_rules_set_funcname(cte_rules *rules, cte_wipe_policy policy, char *
     unsigned ret = 0;
     cte_function *fn;
     // cte_printf("Pat: %s %d\n", pat, children);
+    if (children)
+        cte_reset_visited_flags();
+
     for_each_cte_vector(&functions, fn) {
         if (fnmatch(pat, fn->name, 0) == 0) {
             if (children)
@@ -801,11 +830,7 @@ unsigned cte_rules_set_funcname(cte_rules *rules, cte_wipe_policy policy, char *
         }
     }
 
-    if (children) {
-        for (unsigned i = 0; i < rules->length; i++) {
-            rules->policy[i] &= ~CTE_FLAG_VISITED;
-        }
-    }
+
     return ret;
 }
 
@@ -813,14 +838,13 @@ unsigned cte_rules_set_indirect(cte_rules *rules, cte_wipe_policy policy) {
     unsigned ret = 0;
     cte_function *fn;
 
+    cte_reset_visited_flags();
+    
     for_each_cte_vector(&functions, fn) {
         if (fn->meta && fn->meta->flags & FLAG_ADDRESS_TAKEN)
             ret += cte_rules_set_func_1(rules, policy, fn);
     }
 
-    for (unsigned i = 0; i < rules->length; i++) {
-        rules->policy[i] &= ~CTE_FLAG_VISITED;
-    }
     return ret;
 }
 
@@ -1352,7 +1376,7 @@ int cte_restore(void *addr, void *post_call_addr) {
             cte_debug_restore(addr, post_call_addr, f,
                               cte_find_containing_function(post_call_addr));
             cte_printf("\n");
-            /* cte_die("Invalid Callsite at: %p\n", post_call_addr); */
+            cte_die("Invalid Callsite at: %p\n", post_call_addr);
         }
 
         if (strict_callgraph
@@ -1582,9 +1606,9 @@ int cte_init(int flags) {
 #endif
 
         ////////////////////////////////////////////////////////////////
-        // Find Sibling Functions
+        // Find Sibling Functions (only for non-meta functions)
         unsigned length = strlen(func->name);
-        if (length > 5 && strncmp(func->name + length - 5, ".cold", 5) == 0) {
+        if (!func->meta && length > 5 && strncmp(func->name + length - 5, ".cold", 5) == 0) {
             // func is a cold function. We have to find its hot counterpart:
             cte_function *func_hot = NULL, *func2;
 
@@ -1602,7 +1626,6 @@ int cte_init(int flags) {
             // cte_printf("Hot/Cold Pair: \t%s\n\t%s\n", func->name, func_hot->name);
         }
     }
-
 
 #if CONFIG_STAT
     cte_stat_init();
