@@ -58,15 +58,16 @@ int rec(int i) {
 
 int main(void) {
     int fd = open("test.dict", O_RDWR|O_CREAT|O_TRUNC, 0644);
-    int rc = cte_init(CTE_STRICT_CTEMETA);
+    int rc = cte_init(CTE_STRICT_CTEMETA|CTE_STRICT_CALLGRAPH);
     if (rc < 0) {
         perror("CTE Error");
         return 2;
     }
 
     cte_rules *R = cte_rules_init(CTE_KILL);
-    cte_rules_set_func(R, CTE_WIPE, &main, 1);
+    cte_rules_set_funcname(R, CTE_WIPE, "_dl_fini", 1);
     cte_rules_set_indirect(R, CTE_WIPE);
+    cte_rules_set_func(R, CTE_WIPE, &main, 1);
     cte_wipe(R);
 
     fnptr = testfnptr;
