@@ -83,7 +83,8 @@ static void cte_mmap_inc(void **addr, size_t *size) {
     if (page_size == 0) {
         page_size = sysconf(_SC_PAGESIZE);
     }
-    size_t new_size = *size + page_size;
+    // We allocate Memory in 128K increments to save mremap calls
+    size_t new_size = *size + (page_size * 32);
     if (!*addr) {
         *addr = mmap(NULL, new_size, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
