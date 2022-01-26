@@ -49,7 +49,7 @@ def analyze(data):
 
     print("Total bytes loaded (%):",   (sum(df.bytes) - sum(df.sum_False))/ sum(df.bytes))
     print("Wipeable bytes loaded (%):", (sum(df.sum_True)/sum(df.sum_Total)))
-    print("Wipeable funcs loaded (%):", (sum(df.len_True)/sum(df.len_Total)))
+    print("Wipeable funcs loaded (%):", (sum(df.len_True)/sum(df.len_Total)), sum(df.len_True))
     print("Restore (count):", sum(df.len_True), data['restore_count'], data['restore_time']/1e6)
 
     print(data.keys())

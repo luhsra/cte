@@ -1880,12 +1880,19 @@ void cte_dump_state(int fd, unsigned flags) {
 unsigned cte_get_wiped_ranges(struct cte_range *ranges) {
     struct cte_function *func;
     unsigned ret = 0;
+    uint32_t libcte_text_idx = cte_find_function(&cte_get_wiped_ranges)->text_idx;
+    uint32_t libelf_text_idx = cte_find_function(&elf_end)->text_idx;
+
     for_each_cte_vector(&functions, func) {
         if (!func->body) continue;
-        if (cte_func_state(func) != CTE_LOAD) {
+        if (cte_func_state(func) != CTE_LOAD
+            && func->text_idx != libcte_text_idx
+            && func->text_idx != libelf_text_idx) {
+            // CTE_WIPE | CTE_KILL
             if (ret > 0 &&
                 func->vaddr == (ranges[ret-1].address + ranges[ret-1].length) ) {
                 ranges[ret-1].length += func->size;
+                // cte_printf("CTE_LOAD: %s\n", func->name);
             } else { // New interval
                 cte_text *text = cte_vector_get(&texts, func->text_idx);
 
