@@ -48,13 +48,29 @@ static size_t cte_sealed_sec_size = 0;
 #if CONFIG_STAT
 cte_stat_t cte_stat;
 
+static __thread cte_stat_t *cte_stat_thread;
+
+static cte_stat_t *cte_get_stat(void) {
+    return (cte_stat_thread) ? cte_stat_thread : &cte_stat;
+}
+
 static void cte_stat_init() {
     cte_stat.init_time = 0;
     cte_stat.restore_count = 0;
     cte_stat.restore_times = calloc(functions.length, sizeof(*cte_stat.restore_times));
 }
 
+void cte_stat_init_thread(void) {
+    cte_stat_thread = calloc(1, sizeof(cte_stat_t));
+    cte_stat_thread->init_time = cte_stat.init_time;
+    cte_stat_thread->restore_times = calloc(functions.length, sizeof(*cte_stat.restore_times));
+    cte_stat_thread->text_bytes = cte_stat.text_bytes;
+    cte_stat_thread->function_bytes = cte_stat.function_bytes;
+}
+
 #define CLOCK_LIBCTE CLOCK_REALTIME
+#else
+void cte_stat_init_thread(void) {}
 #endif
 
 #if CONFIG_THRESHOLD
@@ -1340,7 +1356,7 @@ int cte_restore(void *addr, void *post_call_addr) {
 #if CONFIG_STAT
     struct timespec ts0;
     if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts0) == -1) cte_die("clock_gettime");
-    cte_stat.restore_count += 1;
+    cte_get_stat()->restore_count += 1;
 #endif
 
     cte_implant *implant = addr;
@@ -1407,8 +1423,8 @@ int cte_restore(void *addr, void *post_call_addr) {
     cte_memcpy(addr, f->body, f->size);
     cte_modify_end(addr, f->size);
 #if CONFIG_STAT
-    cte_stat.cur_wipe_count -= 1;
-    cte_stat.cur_wipe_bytes -= f->size;
+    cte_get_stat()->cur_wipe_count -= 1;
+    cte_get_stat()->cur_wipe_bytes -= f->size;
 #endif
 
 #if CONFIG_THRESHOLD
@@ -1426,8 +1442,8 @@ int cte_restore(void *addr, void *post_call_addr) {
                 cte_modify_end(func_sibling->vaddr, func_sibling->size);
 
 #if CONFIG_STAT
-                cte_stat.cur_wipe_count -= 1;
-                cte_stat.cur_wipe_bytes -= func_sibling->size;
+                cte_get_stat()->cur_wipe_count -= 1;
+                cte_get_stat()->cur_wipe_bytes -= func_sibling->size;
 #endif
 #if CONFIG_THRESHOLD
                 if (wipestat) wipestat[func_id(func_sibling)].restore++;
@@ -1445,8 +1461,8 @@ int cte_restore(void *addr, void *post_call_addr) {
                 cte_modify_end(func_sibling->vaddr, func_sibling->size);
 
 #if CONFIG_STAT
-                cte_stat.cur_wipe_count -= 1;
-                cte_stat.cur_wipe_bytes -= func_sibling->size;
+                cte_get_stat()->cur_wipe_count -= 1;
+                cte_get_stat()->cur_wipe_bytes -= func_sibling->size;
 #endif
 #if CONFIG_THRESHOLD
                 if (wipestat) wipestat[func_id(func_sibling)].restore++;
@@ -1464,8 +1480,8 @@ int cte_restore(void *addr, void *post_call_addr) {
     if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts) == -1) cte_die("clock_gettime");
 
     uint64_t restore_time = timespec_diff_ns(ts0, ts);
-    cte_stat.restore_time += restore_time;
-    cte_stat.restore_times[func_id(f)] = timespec_diff_ns(cte_stat.last_wipe_timestamp, ts);
+    cte_get_stat()->restore_time += restore_time;
+    cte_get_stat()->restore_times[func_id(f)] = timespec_diff_ns(cte_get_stat()->last_wipe_timestamp, ts);
 #endif
 
     return 0;
@@ -1669,10 +1685,10 @@ int cte_mmview_unshare(void) {
 CTE_ESSENTIAL
 int cte_wipe(cte_rules *rules) {
 #if CONFIG_STAT
-    //if (cte_stat.wipe_count) {
-    //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_stat.restore_time/cte_stat.wipe_count/1e3));
+    //if (cte_get_stat()->wipe_count) {
+    //    cte_printf("restore_time: %d us/wipe\n", (uint32_t)(cte_get_stat()->restore_time/cte_get_stat()->wipe_count/1e3));
     //}
-    cte_stat.wipe_count ++;
+    cte_get_stat()->wipe_count ++;
 
     struct timespec ts0;
     if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts0) == -1) cte_die("clock_gettime");
@@ -1751,16 +1767,16 @@ int cte_wipe(cte_rules *rules) {
     struct timespec ts1;
     if (syscall(SYS_clock_gettime, CLOCK_LIBCTE, &ts1) == -1) cte_die("clock_gettime");
 
-    cte_stat.last_wipe_time  = timespec_diff_ns(ts0, ts1);
-    cte_stat.last_wipe_count = wipe_count;
-    cte_stat.last_wipe_bytes = wipe_bytes;
-    cte_stat.last_wipe_timestamp = ts1;
-    cte_stat.last_wipe_function = cf;
+    cte_get_stat()->last_wipe_time  = timespec_diff_ns(ts0, ts1);
+    cte_get_stat()->last_wipe_count = wipe_count;
+    cte_get_stat()->last_wipe_bytes = wipe_bytes;
+    cte_get_stat()->last_wipe_timestamp = ts1;
+    cte_get_stat()->last_wipe_function = cf;
 
-    cte_stat.cur_wipe_count = wipe_count;
-    cte_stat.cur_wipe_bytes = wipe_bytes;
+    cte_get_stat()->cur_wipe_count = wipe_count;
+    cte_get_stat()->cur_wipe_bytes = wipe_bytes;
 
-    // cte_fdprintf(1, "wipe time: %d us\n", (uint32_t) (cte_stat.last_wipe_time/1e3));
+    // cte_fdprintf(1, "wipe time: %d us\n", (uint32_t) (cte_get_stat()->last_wipe_time/1e3));
 #endif
     return wipe_count;
 }
@@ -1800,19 +1816,19 @@ void cte_dump_state(int fd, unsigned flags) {
 
 #define HEX32(x) ((x) >> 32), ((x) & 0xffffffff)
 #if CONFIG_STAT
-    cte_fdprintf(fd, "  \"init_time\": 0x%08x%08x,\n", HEX32(cte_stat.init_time));
-    cte_fdprintf(fd, "  \"restore_count\": %d,\n", cte_stat.restore_count);
-    cte_fdprintf(fd, "  \"restore_time\": 0x%08x%08x,\n", HEX32(cte_stat.restore_time));
-    cte_fdprintf(fd, "  \"last_wipe_time\": 0x%08x%08x,\n", HEX32(cte_stat.last_wipe_time));
-    cte_fdprintf(fd, "  \"last_wipe_count\": %d,\n", cte_stat.last_wipe_count);
-    cte_fdprintf(fd, "  \"last_wipe_bytes\": %d,\n", cte_stat.last_wipe_bytes);
-    cte_fdprintf(fd, "  \"last_wipe_function\": \"%s\",\n", cte_stat.last_wipe_function->name);
-    cte_fdprintf(fd, "  \"cur_wipe_count\": %d,\n", cte_stat.cur_wipe_count);
-    cte_fdprintf(fd, "  \"cur_wipe_bytes\": %d,\n", cte_stat.cur_wipe_bytes);
+    cte_fdprintf(fd, "  \"init_time\": 0x%08x%08x,\n", HEX32(cte_get_stat()->init_time));
+    cte_fdprintf(fd, "  \"restore_count\": %d,\n", cte_get_stat()->restore_count);
+    cte_fdprintf(fd, "  \"restore_time\": 0x%08x%08x,\n", HEX32(cte_get_stat()->restore_time));
+    cte_fdprintf(fd, "  \"last_wipe_time\": 0x%08x%08x,\n", HEX32(cte_get_stat()->last_wipe_time));
+    cte_fdprintf(fd, "  \"last_wipe_count\": %d,\n", cte_get_stat()->last_wipe_count);
+    cte_fdprintf(fd, "  \"last_wipe_bytes\": %d,\n", cte_get_stat()->last_wipe_bytes);
+    cte_fdprintf(fd, "  \"last_wipe_function\": \"%s\",\n", cte_get_stat()->last_wipe_function->name);
+    cte_fdprintf(fd, "  \"cur_wipe_count\": %d,\n", cte_get_stat()->cur_wipe_count);
+    cte_fdprintf(fd, "  \"cur_wipe_bytes\": %d,\n", cte_get_stat()->cur_wipe_bytes);
     cte_fdprintf(fd, "  \"function_count\": %d,\n", functions.length);
-    cte_fdprintf(fd, "  \"function_bytes\": %d,\n", cte_stat.function_bytes);
+    cte_fdprintf(fd, "  \"function_bytes\": %d,\n", cte_get_stat()->function_bytes);
     cte_fdprintf(fd, "  \"text_count\": %d,\n", texts.length);
-    cte_fdprintf(fd, "  \"text_bytes\": %d,\n", cte_stat.text_bytes);
+    cte_fdprintf(fd, "  \"text_bytes\": %d,\n", cte_get_stat()->text_bytes);
 #endif
 
     if (flags & CTE_DUMP_TEXTS) {
@@ -1839,7 +1855,7 @@ void cte_dump_state(int fd, unsigned flags) {
                 cte_function *f = cte_vector_get(&functions, i);
                 loadables[i] = !f->meta;
             }
-            cte_mark_loadable(loadables, cte_stat.last_wipe_function);
+            cte_mark_loadable(loadables, cte_get_stat()->last_wipe_function);
         }
 #endif
 
@@ -1857,7 +1873,7 @@ void cte_dump_state(int fd, unsigned flags) {
                          cte_func_state(func),
                          func->essential ? "True": "False",
 #if CONFIG_STAT
-                         HEX32(cte_stat.restore_times[func_id(func)]),
+                         HEX32(cte_get_stat()->restore_times[func_id(func)]),
 #else
                          HEX32(-1UL),
 #endif
