@@ -370,6 +370,8 @@ static cte_meta_header *cte_meta_load(char *objname, void *load_addr) {
     if (data == MAP_FAILED)
         cte_die("mmap failed: %s\n", filename);
     close(fd);
+    stat(objname, &sb);
+    printf("disk,%s,%lu,%lu\n", filename, size, sb.st_size);
 
     return cte_meta_init(data, size, load_addr, filename);
 }
@@ -644,6 +646,7 @@ static void cte_meta_assign(void) {
     printf("Meta: avg_siblings: %f\n", (float)c_total_siblings / c_meta_fns);
     printf("Meta: max_callees:  %lu (%s)\n", c_max_callees, fn_max_callees->name);
     printf("Meta: max_siblings: %lu (%s)\n", c_max_siblings, fn_max_siblings->name);
+    printf("ram,data,%lu\n", data_capacity);
 #endif
 }
 
@@ -1650,6 +1653,12 @@ int cte_init(int flags) {
 
     cte_stat.init_time = timespec_diff_ns(ts0, ts1);
     printf("init time: %.2f ms\n", cte_stat.init_time / (double)1e6);
+
+    printf("ram,functions,%lu\n", functions.length * functions.element_size);
+    printf("ram,texts,%lu\n", texts.length * texts.element_size);
+    printf("ram,plts,%lu\n", plts.length * plts.element_size);
+    printf("ram,visited,%lu\n", sizeof(*visited_flags) * functions.length);
+    printf("ram,bodies,%lu\n", bodies_size);
 #endif
     return 0;
 }
@@ -1720,16 +1729,13 @@ int cte_wipe(cte_rules *rules) {
             policy = rules->policy[func_id(f)] & ~(CTE_FLAG_MASK);
         }
 
+        cte_wipe_policy func_state = cte_func_state(f);
+
         if (!f->essential && f != cf) {
-            if (cte_func_state(f) != policy) {
+            if (func_state != policy) {
                 if (cte_wipe_fn(f, policy)) { // Wipe Function!
-                    wipe_count += 1;
-                    wipe_bytes += f->size;
+                    func_state = policy;
                 }
-            } else if (policy != CTE_LOAD) {
-                // The function is still wiped, account for that
-                wipe_count += 1;
-                wipe_bytes += f->size;
             }
 #if CONFIG_THRESHOLD
             // WIPESTAT: Limit wipe statistics and Increment wipe counters
@@ -1741,6 +1747,11 @@ int cte_wipe(cte_rules *rules) {
                 wipestat[func_id(f)].wipe++;
             }
 #endif
+        }
+
+        if (func_state != CTE_LOAD) {
+            wipe_count += 1;
+            wipe_bytes += f->size;
         }
     }
 
