@@ -57,6 +57,7 @@ int cte_wipe(cte_rules *rules);
 #define CTE_DUMP_FUNCS_LOADABLE (1 << 2)  // only together with CTE_DUMP_FUNCS
 
 void cte_dump_state(int fd, unsigned flags);
+void cte_stat_init_thread(void);  // Only effective with CONFIG_STAT
 
 struct cte_range {
     char *address;
