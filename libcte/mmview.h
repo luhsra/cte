@@ -5,23 +5,23 @@ extern "C" {
 #endif
 
 static inline long mmview_create(void) {
-    return syscall(443);
+    return syscall(1000);
 }
 
 static inline long mmview_delete(long id) {
-    return syscall(446, id);
+    return syscall(1003, id);
 }
 
 static inline long mmview_migrate(long id) {
-    return syscall(444, id);
+    return syscall(1001, id);
 }
 
 static inline long mmview_current(void) {
-    return syscall(444, -1L);
+    return syscall(1001, -1L);
 }
 
 static inline long mmview_unshare(void *start, size_t len) {
-    return syscall(445, start, len);
+    return syscall(1002, start, len);
 }
 
 #ifdef __cplusplus
