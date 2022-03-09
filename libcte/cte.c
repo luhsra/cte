@@ -50,6 +50,7 @@ cte_stat_t cte_stat;
 
 static __thread cte_stat_t *cte_stat_thread;
 
+CTE_ESSENTIAL
 static cte_stat_t *cte_get_stat(void) {
     return (cte_stat_thread) ? cte_stat_thread : &cte_stat;
 }
@@ -282,8 +283,8 @@ static bool cte_is_plt(void *addr) {
    counter per function. Each time, we perform a new search, we
    increment the current visited mark.
  */
-static uint16_t *visited_flags;
-static uint16_t functions_visited_flag;
+static __thread uint16_t *visited_flags;
+static __thread uint16_t functions_visited_flag;
 #define FUNCTIONS_VISITED_FLAG_MAX ((1 << (sizeof(functions_visited_flag) * 8)) - 1)
 
 static void cte_reset_visited_flags(void) {
@@ -1089,6 +1090,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
         // Does this function have an essential name?
         struct { char begin; char *pattern; } names[] = {
             {0, "_start"}, {0, "__libc_start_main"}, {0, "main"}, {0, "syscall"}, {0, "start_thread"},
+            {0, "__tls_get_addr_slow"}, {0, "__strcasecmp_l_avx"},
             // mprotect
             {0, "mprotect"}, {0, "pkey_mprotect"}, {0, "__mprotect"},
             // // memcpy
