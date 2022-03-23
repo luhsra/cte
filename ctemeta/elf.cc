@@ -79,7 +79,7 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
     }
 
     if (!symtab_found)
-        error(Error::ELF, "Symbol table not found");
+        error(Error::ELF, "Symbol table not found\n");
 
     return map;
 }
@@ -458,7 +458,8 @@ Cte Cte::from_elf(const char *filename) {
             if (text_found)
                 error(Error::ELF, "ELF: Unsupported: Multiple executable segments\n");
             if (phdr.p_memsz != phdr.p_filesz)
-                error(Error::ELF, "ELF: text segment filesize != memsize\n");
+                error(Error::ELF, "ELF: text segment filesize (%lu) != memsize (%lu)\n",
+                      phdr.p_filesz, phdr.p_memsz);
             text_vaddr = phdr.p_vaddr;
             text_size = phdr.p_memsz;
             text_found = true;
