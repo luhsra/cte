@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <link.h>
+#include <iomanip>
 #include <string>
 #include <map>
 #include <vector>
@@ -6,6 +8,7 @@
 #include <gelf.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <string.h>
 #include "ctemeta.hh"
 #include "util.hh"
@@ -365,6 +368,54 @@ scan_relocations(Elf *elf, addr_t text_start, addr_t text_end) {
     return vec;
 }
 
+static std::vector<std::string> get_debug_files(Elf *elf) {
+    std::vector<std::string> ret;
+    Elf_Scn* scn = NULL;
+    while ((scn = elf_nextscn(elf, scn)) != NULL) {
+        GElf_Shdr shdr;
+        if (gelf_getshdr(scn, &shdr) != &shdr)
+            error(Error::ELF, "ELF: Invalid section\n");
+
+        if (shdr.sh_type != SHT_NOTE)
+            continue;
+
+        Elf_Data *data = elf_getdata(scn, NULL);
+        uint8_t *rdata = (uint8_t*)data->d_buf;
+        ElfW(Nhdr) nhdr;
+        size_t offset = 0;
+        do {
+            size_t name_offset;
+            size_t desc_offset;
+            offset = gelf_getnote(data, offset, &nhdr, &name_offset, &desc_offset);
+            if (nhdr.n_type == NT_GNU_BUILD_ID &&
+                nhdr.n_descsz != 0 &&
+                nhdr.n_namesz == 4 &&
+                memcmp(&rdata[name_offset], "GNU", 4) == 0) {
+
+                std::stringstream filename;
+                filename << "/usr/lib/debug/.build-id/";
+                filename << std::hex << std::setfill('0') << std::setw(2)
+                         << (int)rdata[desc_offset] << "/";
+                for (unsigned i = 1; i < nhdr.n_descsz; i++) {
+                    filename << std::hex << std::setfill('0') << std::setw(2)
+                             << (int)rdata[desc_offset + i];
+                }
+                filename << ".debug";
+
+                std::string name = filename.str();
+                debug("Found debug info: %s\n", name.c_str());
+
+                // Add the filnanme to the list if the file exists
+                struct stat buffer;
+                if (stat(name.c_str(), &buffer) == 0) {
+                    ret.push_back(name);
+                }
+            }
+        } while (offset == 0);
+    }
+    return ret;
+}
+
 Cte Cte::from_elf(const char *filename) {
     if (elf_version(EV_CURRENT) == EV_NONE)
         error_libelf();
@@ -416,18 +467,37 @@ Cte Cte::from_elf(const char *filename) {
         }
     }
 
+    std::map<addr_t, Function> functions;
+
     // Collect info from debug file, if build id is present
-    // Read Symbols from debug info
-    for (size_t i = 0; i < phdrnum; i++) {
-        if (gelf_getphdr(elf, i, &phdr) != &phdr)
+    // read symbols from debug info
+    std::vector<std::string> dbgs = get_debug_files(elf);
+
+    // Prefer debug elf file for the symbols (functions)
+    if (!dbgs.empty()) {
+        // FIXME: Currently, the first found dbgsym elf is taken
+        const char *filename = dbgs[0].c_str();
+        info("ELF: Use debug info: %s\n", filename);
+        int dbgfile = open(filename, O_RDONLY);
+        if (dbgfile < 0)
+            error(Error::IO, "IO error: %s: %s\n", filename, strerror(errno));
+
+        Elf *dbgelf = elf_begin(dbgfile, ELF_C_READ, NULL);
+        if (!dbgelf)
             error_libelf();
-        if (phdr.p_type == PT_NOTE) {
-            // TODO cte_handle_build_id
+
+        if (elf_kind(dbgelf) != ELF_K_ELF) {
+            elf_end(dbgelf);
+            error(Error::ELF, "Invalid ELF\n");
         }
+        functions = scan_functions(dbgelf, text_vaddr, text_vaddr + text_size);
+        elf_end(dbgelf);
+        close(dbgfile);
+    } else {
+        functions = scan_functions(elf, text_vaddr, text_vaddr + text_size);
     }
 
-    // Get function and section data
-    auto functions = scan_functions(elf, text_vaddr, text_vaddr + text_size);
+    // Get section and relocation data
     auto sections = scan_sections(elf, functions);
     auto relocations = scan_relocations(elf, text_vaddr, text_vaddr + text_size);
 
