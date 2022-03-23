@@ -3,15 +3,13 @@
 
 CC := gcc
 
-PLUGIN_DIR=../gcc-plugin
-PLUGIN=$(PLUGIN_DIR)/cte.so
 LIBRARY_DIR=../libcte
 LIBRARY=$(LIBRARY_DIR)/libcte.so
 LIBRARY_MINIMAL=$(LIBRARY_DIR)/libcte-minimal.a
 
 
 # -falign-functions is also enabled in -O2
-CFLAGS += -Wall -Wextra -fplugin=$(PLUGIN) -I$(LIBRARY_DIR) -g -ggdb -O3 -falign-functions
+CFLAGS += -Wall -Wextra -I$(LIBRARY_DIR) -g -ggdb -O3 -falign-functions
 LDFLAGS += -L$(LIBRARY_DIR)
 LIBS    += -lelf -ldl
 SOURCES = $(wildcard *.c)
@@ -52,12 +50,6 @@ img: img.o  $(LIBRARY_MINIMAL)
 
 $(LIBRARY) $(LIBRARY_MINIMAL): always
 	$(MAKE) -C $(LIBRARY_DIR)
-
-$(PLUGIN): always
-	$(MAKE) -C $(PLUGIN_DIR)
-
-%.o: %.c $(PLUGIN)
-	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f $(PRODUCT) $(OBJECTS)
