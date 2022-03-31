@@ -50,6 +50,8 @@ scan_functions(Elf *elf, addr_t text_start, addr_t text_end) {
                     continue;
                 if (sym.st_value < text_start || sym.st_value >= text_end)
                     continue;
+                if (GELF_ST_TYPE(sym.st_info) == STT_SECTION)
+                    continue;
                 if (GELF_ST_TYPE(sym.st_info) == STT_NOTYPE) {
                     warn("ELF: Ignore non-typed symbol in text: %s\n",
                          name.c_str());
