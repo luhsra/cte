@@ -7,6 +7,10 @@
 bool Function::merge_same(Function &other) {
     if (vaddr == other.vaddr && (size == other.size ||
                                  size == 0 || other.size == 0)) {
+        if (name == "")
+            name = other.name;
+        if (size == 0)
+            size = other.size;
         address_taken = address_taken || other.address_taken;
         has_indirect_calls = has_indirect_calls || other.has_indirect_calls;
         siblings.insert(other.siblings.begin(), other.siblings.end());
