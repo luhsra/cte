@@ -994,7 +994,7 @@ static int cte_callback(struct dl_phdr_info *info, size_t _size, void *data) {
             printf("essential section: [%s] %s (%p, %lu)\n", filename, name,
                    essential_sec_vaddr, essential_sec_size);
         }
-        if (strcmp(name, ".cte_essential") == 0) {
+        if (strcmp(name, ".cte_sealed") == 0) {
             cte_sealed_sec_vaddr = cte_get_vaddr(info, shdr.sh_addr);
             cte_sealed_sec_size = shdr.sh_size;
         }
