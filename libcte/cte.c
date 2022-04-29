@@ -1494,19 +1494,17 @@ int cte_restore(void *addr, void *post_call_addr) {
 CTE_ESSENTIAL
 static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     cte_implant *implant = fn->vaddr;
-    // FIXME: This should actually load the function
-    if (policy == CTE_LOAD)
-        cte_die("Policy CTE_LOAD is not yet implemented");
-
-    // CTE_WIPE|CTE_KILL: Wipe the whole function body
-    if (policy == CTE_KILL) {
+    if (policy == CTE_LOAD) {
+        cte_modify_begin(fn->vaddr, fn->size);
+        cte_memcpy(fn->vaddr, fn->body, fn->size);
+        cte_modify_end(fn->vaddr, fn->size);
+    } else if (policy == CTE_KILL) {
         if (fn->size < 1) { // We need at last 1 byte to wipe it
             return 0;
         }
         cte_memset(fn->vaddr,
                    0xcc, // int3 int3 int3...
                    fn->size);
-        return 1;
     } else if (policy == CTE_WIPE ) {
         if (fn->size < sizeof(cte_implant)) {
             cte_text *text = cte_vector_get(&texts, fn->text_idx);
@@ -1709,6 +1707,26 @@ int cte_wipe(cte_rules *rules) {
     // Find caller function, as we do not wipe it
     void *retaddr = __builtin_extract_return_addr (__builtin_return_address (0));
     cte_function * cf = cte_find_containing_function(retaddr);
+
+    // Mark all siblings of CTE_LOAD functions also as CTE_LOAD.
+    // This is consistent with the behavior of cte_restore which also implicitly
+    // loads the sibling functions.
+    if (rules) {
+        for (cte_function *f = fs; f < fs + functions.length; f++) {
+            cte_wipe_policy policy = rules->policy[func_id(f)] & ~(CTE_FLAG_MASK);
+            if (policy == CTE_LOAD) {
+                if (!f->meta)
+                    cte_die("Usage of wipe rules requires ctemeta information");
+                for (uint32_t n = 0; n < f->meta->siblings_count; n++) {
+                    uint32_t id = f->meta->siblings[n];
+                    if (!(rules->policy[id] & CTE_FORCE) &&
+                        !(rules->policy[id] & CTE_SYSTEM_FORCE)) {
+                        rules->policy[id] = CTE_LOAD;
+                    }
+                }
+            }
+        }
+    }
 
     for (cte_text *t = text; t < text + texts.length; t++)
         cte_modify_begin(t->vaddr, t->size);
