@@ -282,8 +282,8 @@ static bool cte_is_plt(void *addr) {
    counter per function. Each time, we perform a new search, we
    increment the current visited mark.
  */
-static uint16_t *visited_flags;
-static uint16_t functions_visited_flag;
+static __thread uint16_t *visited_flags;
+static __thread uint16_t functions_visited_flag;
 #define FUNCTIONS_VISITED_FLAG_MAX ((1 << (sizeof(functions_visited_flag) * 8)) - 1)
 
 static void cte_reset_visited_flags(void) {
