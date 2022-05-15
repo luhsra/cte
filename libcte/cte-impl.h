@@ -77,6 +77,8 @@ typedef struct cte_stat {
     uint64_t  last_wipe_time; // how long did the last wipe take
     uint64_t  last_wipe_count; // how many functions were wiped
     uint64_t  last_wipe_bytes; // how many bytes were wiped
+    uint64_t  last_kill_count; // how many functions were killed
+    uint64_t  last_kill_bytes; // how many bytes were killed
     struct timespec  last_wipe_timestamp;
     cte_function *last_wipe_function; // The function that called the last wipe
 

@@ -1733,6 +1733,8 @@ int cte_wipe(cte_rules *rules) {
 
     int wipe_count = 0;
     int wipe_bytes = 0;
+    int kill_count = 0;
+    int kill_bytes = 0;
 
 #if CONFIG_THRESHOLD
     // Copy Thread local pointer
@@ -1783,9 +1785,12 @@ int cte_wipe(cte_rules *rules) {
 #endif
         }
 
-        if (func_state != CTE_LOAD) {
+        if (func_state == CTE_WIPE) {
             wipe_count += 1;
             wipe_bytes += f->size;
+        } else if (func_state == CTE_KILL) {
+            kill_count += 1;
+            kill_bytes += f->size;
         }
     }
 
@@ -1799,6 +1804,8 @@ int cte_wipe(cte_rules *rules) {
     cte_get_stat()->last_wipe_time  = timespec_diff_ns(ts0, ts1);
     cte_get_stat()->last_wipe_count = wipe_count;
     cte_get_stat()->last_wipe_bytes = wipe_bytes;
+    cte_get_stat()->last_kill_count = kill_count;
+    cte_get_stat()->last_kill_bytes = kill_bytes;
     cte_get_stat()->last_wipe_timestamp = ts1;
     cte_get_stat()->last_wipe_function = cf;
 
@@ -1851,6 +1858,8 @@ void cte_dump_state(int fd, unsigned flags) {
     cte_fdprintf(fd, "  \"last_wipe_time\": 0x%08x%08x,\n", HEX32(cte_get_stat()->last_wipe_time));
     cte_fdprintf(fd, "  \"last_wipe_count\": %d,\n", cte_get_stat()->last_wipe_count);
     cte_fdprintf(fd, "  \"last_wipe_bytes\": %d,\n", cte_get_stat()->last_wipe_bytes);
+    cte_fdprintf(fd, "  \"last_kill_count\": %d,\n", cte_get_stat()->last_kill_count);
+    cte_fdprintf(fd, "  \"last_kill_bytes\": %d,\n", cte_get_stat()->last_kill_bytes);
     cte_fdprintf(fd, "  \"last_wipe_function\": \"%s\",\n", cte_get_stat()->last_wipe_function->name);
     cte_fdprintf(fd, "  \"cur_wipe_count\": %d,\n", cte_get_stat()->cur_wipe_count);
     cte_fdprintf(fd, "  \"cur_wipe_bytes\": %d,\n", cte_get_stat()->cur_wipe_bytes);
