@@ -1708,20 +1708,20 @@ int cte_wipe(cte_rules *rules) {
     void *retaddr = __builtin_extract_return_addr (__builtin_return_address (0));
     cte_function * cf = cte_find_containing_function(retaddr);
 
-    // Mark all siblings of CTE_LOAD functions also as CTE_LOAD.
+    // Mark all siblings of CTE_LOAD and CTE_WIPE functions also as CTE_LOAD/WIPE.
     // This is consistent with the behavior of cte_restore which also implicitly
     // loads the sibling functions.
     if (rules) {
         for (cte_function *f = fs; f < fs + functions.length; f++) {
             cte_wipe_policy policy = rules->policy[func_id(f)] & ~(CTE_FLAG_MASK);
-            if (policy == CTE_LOAD) {
+            if (policy == CTE_LOAD || policy == CTE_WIPE) {
                 if (!f->meta)
                     cte_die("Usage of wipe rules requires ctemeta information");
                 for (uint32_t n = 0; n < f->meta->siblings_count; n++) {
                     uint32_t id = f->meta->siblings[n];
                     if (!(rules->policy[id] & CTE_FORCE) &&
                         !(rules->policy[id] & CTE_SYSTEM_FORCE)) {
-                        rules->policy[id] = CTE_LOAD;
+                        rules->policy[id] = policy;
                     }
                 }
             }
