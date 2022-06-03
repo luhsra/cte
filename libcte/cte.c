@@ -1717,10 +1717,14 @@ int cte_wipe(cte_rules *rules) {
                     cte_die("Usage of wipe rules requires ctemeta information");
                 for (uint32_t n = 0; n < f->meta->siblings_count; n++) {
                     uint32_t id = f->meta->siblings[n];
-                    if (!(rules->policy[id] & CTE_FORCE) &&
-                        !(rules->policy[id] & CTE_SYSTEM_FORCE)) {
-                        rules->policy[id] = policy;
-                    }
+                    if ((rules->policy[id] & CTE_FORCE) ||
+                        (rules->policy[id] & CTE_SYSTEM_FORCE))
+                        continue;
+
+                    if (rules->policy[id] == CTE_LOAD)  // don't downgrade
+                        continue;
+
+                    rules->policy[id] = policy;
                 }
             }
         }
