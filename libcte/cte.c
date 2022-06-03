@@ -1495,9 +1495,7 @@ CTE_ESSENTIAL
 static int cte_wipe_fn(cte_function *fn, cte_wipe_policy policy) {
     cte_implant *implant = fn->vaddr;
     if (policy == CTE_LOAD) {
-        cte_modify_begin(fn->vaddr, fn->size);
         cte_memcpy(fn->vaddr, fn->body, fn->size);
-        cte_modify_end(fn->vaddr, fn->size);
     } else if (policy == CTE_KILL) {
         if (fn->size < 1) { // We need at last 1 byte to wipe it
             return 0;
