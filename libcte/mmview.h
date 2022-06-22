@@ -1,29 +1,35 @@
-#include <unistd.h>
+#ifndef MMVIEW_H
+#define MMVIEW_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-static inline long mmview_create(void) {
-    return syscall(1000);
-}
+#include <sys/syscall.h>
 
-static inline long mmview_delete(long id) {
-    return syscall(1003, id);
-}
+#define SYS_mmview		1000
 
-static inline long mmview_migrate(long id) {
-    return syscall(1001, id);
-}
+/*
+ * mmview() operations:
+ */
+#define MMVIEW_CREATE		0
+#define MMVIEW_DELETE		1
+#define MMVIEW_CURRENT		2
+#define MMVIEW_MIGRATE		3
+#define MMVIEW_UNSHARE		4
+#define MMVIEW_SHARE		5
+#define MMVIEW_SWITCH_BASE	6
 
-static inline long mmview_current(void) {
-    return syscall(1001, -1L);
-}
-
-static inline long mmview_unshare(void *start, size_t len) {
-    return syscall(1002, start, len);
-}
+#define mmview_create() 		syscall(SYS_mmview, MMVIEW_CREATE)
+#define mmview_delete(id) 		syscall(SYS_mmview, MMVIEW_DELETE, (long) (id))
+#define mmview_current() 		syscall(SYS_mmview, MMVIEW_CURRENT)
+#define mmview_migrate(id)		syscall(SYS_mmview, MMVIEW_MIGRATE, (long) (id))
+#define mmview_unshare(start, len)	syscall(SYS_mmview, MMVIEW_UNSHARE, (void *) (start), (size_t) (len))
+#define mmview_share(start, len)	syscall(SYS_mmview, MMVIEW_SHARE, (void *) (start), (size_t) (len))
+#define mmview_switch_base()		syscall(SYS_mmview, MMVIEW_SWITCH_BASE)
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
