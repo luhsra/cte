@@ -1714,7 +1714,7 @@ int cte_wipe(cte_rules *rules) {
             cte_wipe_policy policy = rules->policy[func_id(f)] & ~(CTE_FLAG_MASK);
             if (policy == CTE_LOAD || policy == CTE_WIPE) {
                 if (!f->meta)
-                    cte_die("Usage of wipe rules requires ctemeta information");
+                    cte_fdprintf(2, "WARNING: cte_wipe with rules: No ctemtea information: %s\n", f->name);
                 for (uint32_t n = 0; n < f->meta->siblings_count; n++) {
                     uint32_t id = f->meta->siblings[n];
                     if ((rules->policy[id] & CTE_FORCE) ||
